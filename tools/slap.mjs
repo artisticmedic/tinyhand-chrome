@@ -66,5 +66,20 @@ console.log('after ⌥Z: display', restored, '| inline style left behind:', JSON
 await page.mouse.click(x, y);
 await wait(200);
 console.log('plain click reaches page:', (await page.evaluate(() => window.pageClicks)) > 0);
+
+const crossFrame = page.frames().find((f) => f.url().includes(':8742/'));
+const chipBox = await page.frameLocator('#f-cross').locator('.chip').boundingBox();
+await page.mouse.click(40, 40);
+await page.keyboard.down('Alt');
+await page.mouse.move(chipBox.x + chipBox.width / 2, chipBox.y + chipBox.height / 2, { steps: 4 });
+await page.mouse.down();
+await page.mouse.up();
+await wait(900);
+const chipGone = await crossFrame.evaluate(() => getComputedStyle(document.querySelector('.chip')).display);
+await page.keyboard.press('KeyZ');
+await page.keyboard.up('Alt');
+await wait(500);
+const chipBack = await crossFrame.evaluate(() => getComputedStyle(document.querySelector('.chip')).display);
+console.log(`slap in cross-origin iframe: display ${chipGone} | after ⌥Z with focus in the parent: display ${chipBack}`);
 console.log('page errors:', errors.length ? errors : 'none');
 await context.close();

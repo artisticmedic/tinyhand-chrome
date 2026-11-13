@@ -29,32 +29,53 @@ function setCursorCss({ css, previous }, sender) {
     .catch(() => {});
 }
 
-const parentFrames = new Map();
+let parentFrames = {};
+let slapHistory = {};
+const restored = chrome.storage.session.get({ parentFrames: {}, slapHistory: {} }).then((saved) => {
+  parentFrames = saved.parentFrames;
+  slapHistory = saved.slapHistory;
+});
+const persist = () => chrome.storage.session.set({ parentFrames, slapHistory });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
-  for (const key of parentFrames.keys()) {
-    if (key.startsWith(`${tabId}:`)) parentFrames.delete(key);
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await restored;
+  for (const key of Object.keys(parentFrames)) {
+    if (key.startsWith(`${tabId}:`)) delete parentFrames[key];
   }
+  delete slapHistory[tabId];
+  persist();
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!sender.tab) return false;
+function handle(message, sender) {
+  const tabId = sender.tab.id;
+  const key = `${tabId}:${message.id}`;
   if (message.action === 'setCursorCss') {
     setCursorCss(message, sender);
   } else if (message.action === 'claimFrame') {
-    parentFrames.set(`${sender.tab.id}:${message.id}`, sender.frameId);
-    sendResponse({});
-  } else if (message.action === 'toParent') {
-    const frameId = parentFrames.get(`${sender.tab.id}:${message.id}`);
-    if (frameId === undefined) {
-      sendResponse({ unknown: true });
-    } else {
-      chrome.tabs.sendMessage(sender.tab.id, { action: 'fromChild', id: message.id, packet: message.packet }, { frameId })
-        .catch(() => {});
-      sendResponse({});
+    if (!(key in parentFrames)) {
+      parentFrames[key] = sender.frameId;
+      persist();
     }
+  } else if (message.action === 'toParent') {
+    if (!(key in parentFrames)) return { unknown: true };
+    chrome.tabs.sendMessage(tabId, { action: 'fromChild', id: message.id, packet: message.packet }, { frameId: parentFrames[key] })
+      .catch(() => {});
+  } else if (message.action === 'slapped') {
+    (slapHistory[tabId] ??= []).push(sender.frameId);
+    persist();
+  } else if (message.action === 'unslap') {
+    const frameId = slapHistory[tabId]?.pop();
+    if (frameId === undefined) return {};
+    persist();
+    chrome.tabs.sendMessage(tabId, { action: 'unslap' }, { frameId }).catch(() => {});
   }
-  return false;
+  return {};
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!sender.tab) return false;
+  restored.then(() => sendResponse(handle(message, sender)));
+  return true;
 });
 
 let toggles = Promise.resolve();

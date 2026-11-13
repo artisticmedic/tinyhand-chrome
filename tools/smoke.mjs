@@ -52,7 +52,7 @@ await set({ style: 'glove', shadow: true });
 await set({ enabled: false });
 await wait(600);
 const offCursor = await page.evaluate(() => getComputedStyle(document.documentElement).cursor);
-const overlayLeft = await page.evaluate(() => !!document.querySelector('tinyhand-overlay'));
+const overlayLeft = await page.evaluate(() => !!document.querySelector('html > div[popover]'));
 await shot('off', 640, 300, { settle: 300 });
 await set({ enabled: true });
 await wait(600);

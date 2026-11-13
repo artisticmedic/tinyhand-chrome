@@ -18,7 +18,7 @@ const slap = switchRow(`${KEYS.alt}-click slaps things off`, 'slap', settings, `
 document.getElementById('options').append(sound.row, size.row, shadow.row, draw.row, slap.row);
 
 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-const url = URL.parse(tab.url ?? '');
+const url = URL.parse(tab?.url ?? '');
 const host = url && /^https?:$/.test(url.protocol) ? url.hostname : '';
 const siteCard = document.getElementById('site');
 if (host) {

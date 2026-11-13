@@ -1,12 +1,12 @@
-import { DEFAULTS, FADES, INKS, PINNED, SIZES, SOUNDS, STYLES } from './catalog.js';
+import { DEFAULTS, FADES, INKS, PINNED, SIZES, SOUNDS, STYLES, normalize } from './catalog.js';
 
 const IS_MAC = /Mac/.test(navigator.platform);
 export const KEYS = IS_MAC
   ? { alt: '⌥', arrow: '⌘', altZ: '⌥Z' }
   : { alt: 'Alt', arrow: 'Ctrl', altZ: 'Alt+Z' };
 
-export function readSettings() {
-  return chrome.storage.local.get(DEFAULTS);
+export async function readSettings() {
+  return normalize(await chrome.storage.local.get(DEFAULTS));
 }
 
 export function save(values) {

@@ -124,7 +124,8 @@ function scannedShadowRoot(el) {
 const HIDE_CSS = ':root, :root * { cursor: none !important; }';
 
 const shadowSheet = new CSSStyleSheet();
-let shadowRoots = new Set();
+let shadowRoots = new WeakSet();
+let shadowRootRefs = new Set();
 let watchingShadowRoots = false;
 
 const shadowObserver = new MutationObserver((records) => {
@@ -155,13 +156,15 @@ function adoptShadowRoot(root) {
   }
   if (shadowRoots.has(root)) return;
   shadowRoots.add(root);
+  shadowRootRefs.add(new WeakRef(root));
   shadowObserver.observe(root, { childList: true, subtree: true });
   findShadowRoots(root);
 }
 
 function stopWatchingShadowRoots() {
   shadowObserver.disconnect();
-  shadowRoots = new Set();
+  shadowRoots = new WeakSet();
+  shadowRootRefs = new Set();
   watchingShadowRoots = false;
 }
 
@@ -200,7 +203,7 @@ const overlay = {
 };
 
 function createOverlay() {
-  const host = document.createElement('tinyhand-overlay');
+  const host = document.createElement('div');
   host.setAttribute('popover', 'manual');
   host.setAttribute('aria-hidden', 'true');
   host.style.cssText = [
@@ -220,6 +223,7 @@ function createOverlay() {
   overlay.host = host;
   overlay.ctx = overlay.canvas.getContext('2d');
   overlay.inkCtx = overlay.inkCanvas.getContext('2d');
+  new ResizeObserver(resizeOverlay).observe(host);
 }
 
 function mountOverlay() {
@@ -228,8 +232,8 @@ function mountOverlay() {
   const host = overlay.host;
   if (!host.isConnected) {
     document.documentElement.append(host);
-    raiseOverlay();
     resizeOverlay();
+    raiseOverlay();
   }
 }
 
@@ -364,7 +368,7 @@ function drawHand(dt, slap) {
   const stickWidth = Math.max(4, hand.h * s * 0.07);
   const nx = -(wrist.y - grip.y);
   const ny = wrist.x - grip.x;
-  const nl = Math.hypot(nx, ny);
+  const nl = Math.hypot(nx, ny) || 1;
   const mx = (wrist.x + grip.x) / 2;
   const my = (wrist.y + grip.y) / 2;
   const ox = (nx / nl) * (stickWidth / 2);
@@ -647,20 +651,21 @@ function route(type, x, y, buttons = 0, arrow = false) {
     sendToParent({ type, x, y, buttons, arrow });
     return;
   }
-  if (type.startsWith('ink-') && !settings.draw) return;
+  if (type === 'ink-start' && !settings.draw) return;
   if (type === 'slap' && !settings.slap) return;
   if (type === 'ink-start') startInk(x, y);
   else if (type === 'ink-move') { pointAt(x, y); extendInk(x, y, arrow); }
   else if (type === 'ink-end') endInk(arrow);
   else if (type === 'clear') clearInk();
   else if (type === 'down') pressAt(x, y);
-  else if (type === 'up') { pointAt(x, y); releaseHand(); }
+  else if (type === 'up') { pointAt(x, y); endInk(false); releaseHand(); }
   else if (type === 'leave') leaveSoon();
   else if (type === 'release') releaseHand();
   else if (type === 'slap') startSlap(x, y);
   else {
     pointAt(x, y);
-    if (!(buttons & 1)) releaseHand();
+    if (buttons & 1) extendInk(x, y, false);
+    else releaseHand();
   }
 }
 
@@ -681,9 +686,10 @@ function sendToParent(packet) {
 
 function frameElementFor(source) {
   const roots = [document];
-  for (const root of shadowRoots) {
-    if (root.host.isConnected) roots.push(root);
-    else shadowRoots.delete(root);
+  for (const ref of shadowRootRefs) {
+    const root = ref.deref();
+    if (root?.host.isConnected) roots.push(root);
+    else shadowRootRefs.delete(ref);
   }
   for (const root of roots) {
     for (const frame of root.querySelectorAll('iframe, frame')) {
@@ -705,7 +711,7 @@ function framePoint(frame, x, y) {
 
 window.addEventListener('message', (event) => {
   const id = event.data?.[HELLO_KEY];
-  if (typeof id !== 'string' || !event.source) return;
+  if (!event.isTrusted || !/^[0-9a-f]{24}$/.test(id) || !event.source) return;
   const frame = frameElementFor(event.source);
   if (!frame) return;
   const known = childFrames.get(id);
@@ -715,7 +721,8 @@ window.addEventListener('message', (event) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.action !== 'fromChild' || !settings) return;
+  if (message.action === 'unslap') unslap();
+  if (message.action !== 'fromChild' || !settings) return;
   const frame = childFrames.get(message.id);
   if (!frame?.isConnected) {
     childFrames.delete(message.id);
@@ -727,7 +734,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 function isTracked(event) {
-  return settings && event.pointerType !== 'touch';
+  return settings && event.isTrusted && event.pointerType !== 'touch';
 }
 
 let gesture = null;
@@ -790,7 +797,7 @@ window.addEventListener('pointerup', (event) => {
 }, true);
 
 window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && settings) route('clear', 0, 0);
+  if (event.key === 'Escape' && settings && event.isTrusted) route('clear', 0, 0);
 }, true);
 
 window.addEventListener('pointercancel', () => {
@@ -840,6 +847,7 @@ function swallow(event) {
 function mute(types) {
   clearTimeout(mutedTimer);
   muted = new Set([...(muted || []), ...types]);
+  mutedTimer = setTimeout(() => { muted = null; }, 5000);
 }
 
 function unmuteSoon() {
@@ -930,6 +938,7 @@ function slapAt(x, y) {
   if (!el) return;
   const entry = { el, display: saveProp(el, 'display'), timer: 0, animation: null };
   slapped.push(entry);
+  if (!IS_EXTENSION_PAGE) chrome.runtime.sendMessage({ action: 'slapped' }).catch(() => {});
   entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
 }
 
@@ -969,16 +978,22 @@ function isEditable(target) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (!settings?.slap) return;
+  if (!settings?.slap || !event.isTrusted) return;
   if (event.key === 'Alt' && lastPointer) highlight(slapTarget(lastPointer.x, lastPointer.y));
-  if (event.altKey && event.code === 'KeyZ' && !isEditable(event.target) && unslap()) swallow(event);
+  if (!event.altKey || event.code !== 'KeyZ' || isEditable(event.composedPath()[0])) return;
+  swallow(event);
+  if (IS_EXTENSION_PAGE) unslap();
+  else chrome.runtime.sendMessage({ action: 'unslap' }).catch(() => {});
 }, true);
 
 window.addEventListener('keyup', (event) => {
   if (event.key === 'Alt') unhighlight();
 }, true);
 
-window.addEventListener('blur', unhighlight);
+window.addEventListener('blur', () => {
+  unhighlight();
+  if (muted) unmuteSoon();
+});
 
 function topHostname() {
   const origins = location.ancestorOrigins;
@@ -998,10 +1013,12 @@ function standDown() {
 }
 
 async function apply() {
-  catalog ??= await import(extensionUrl('shared/catalog.js'));
-  const stored = await chrome.storage.local.get(catalog.DEFAULTS);
+  if (IS_TOP) catalog ??= await import(extensionUrl('shared/catalog.js'));
+  const stored = IS_TOP
+    ? catalog.normalize(await chrome.storage.local.get(catalog.DEFAULTS))
+    : await chrome.storage.local.get(null);
   const xmlTop = IS_TOP && !(document.documentElement instanceof HTMLElement);
-  if (!stored.enabled || xmlTop || stored.disabledSites.includes(topHostname())) {
+  if (!stored.enabled || xmlTop || stored.disabledSites?.includes(topHostname())) {
     standDown();
     setStyles(null);
     return;

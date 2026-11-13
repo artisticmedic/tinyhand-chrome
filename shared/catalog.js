@@ -101,3 +101,14 @@ export const DEFAULTS = {
   disabledSites: [],
 };
 
+export function normalize(stored) {
+  const known = (list, key, field = 'id') => (list.some((item) => item[field] === stored[key]) ? stored[key] : DEFAULTS[key]);
+  return {
+    ...stored,
+    style: known(STYLES, 'style'),
+    size: known(SIZES, 'size'),
+    sound: known(SOUNDS, 'sound'),
+    ink: known(INKS, 'ink'),
+    fade: known(FADES, 'fade', 'value'),
+  };
+}
