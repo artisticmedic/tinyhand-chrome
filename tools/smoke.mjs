@@ -65,6 +65,14 @@ for (const report of reports) {
   console.log(`${report.frame.replace(/^http:\/\/127.0.0.1:\d+/, '')}: ${report.rows.length - bad.length}/${report.rows.length} pass${report.styleInjected ? '' : ' (no style)'}`);
   for (const r of bad) console.log('  FAIL', r.case, 'expect', r.expect, 'got', String(r.got).slice(0, 60));
 }
+// The tap sound: WebAudio reports the content script's context and each
+// buffer source it starts.
+const cdp = await context.newCDPSession(page);
+const audio = { contexts: [], sources: 0 };
+cdp.on('WebAudio.contextCreated', (e) => audio.contexts.push(e.context.contextState));
+cdp.on('WebAudio.contextChanged', (e) => audio.contexts.push(e.context.contextState));
+cdp.on('WebAudio.audioNodeCreated', (e) => { if (e.node.nodeType === 'AudioBufferSourceNode') audio.sources++; });
+await cdp.send('WebAudio.enable');
 await page.mouse.move(400, 300);
 await page.mouse.down();
 const pressed = await page.evaluate(() => document.documentElement.hasAttribute('data-tinyhand-pressed'));
@@ -73,6 +81,8 @@ const heldAfterUp = await page.evaluate(() => document.documentElement.hasAttrib
 await page.waitForTimeout(200);
 const releasedLater = !(await page.evaluate(() => document.documentElement.hasAttribute('data-tinyhand-pressed')));
 console.log('pressed on mousedown', pressed, '| still pressed right after a quick mouseup', heldAfterUp, '| released after 200ms', releasedLater);
+await page.waitForTimeout(1000);
+console.log('audio context states', audio.contexts.join(' -> ') || 'none', '| buffer sources started', audio.sources);
 console.log('page errors', errors.length ? errors : 'none');
 
 // Turning the hand off removes the styles; turning it back on restores them.

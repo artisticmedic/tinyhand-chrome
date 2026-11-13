@@ -13,7 +13,7 @@
 
 import { HANDS, SIZES } from './catalog.js';
 
-export const RENDER_VERSION = 1;
+export const RENDER_VERSION = 2;
 
 const MAX_CSS_PX = 128;
 const DENSITY = 2;
@@ -59,7 +59,7 @@ function rotate([x, y], angle) {
 }
 
 // Where everything lands, in CSS px with the fingertip at 0,0.
-function layout(hand, length, pressed, shadow) {
+function layout(hand, length, pressed, shadow, stick = true) {
   const [tx, ty] = hand.tip;
   const [wx, wy] = hand.wrist;
   const scale = (length / Math.hypot(wx - tx, wy - ty)) * (pressed ? PRESS_SCALE : 1);
@@ -75,8 +75,10 @@ function layout(hand, length, pressed, shadow) {
   const stickWidth = Math.max(2.5, 0.07 * hand.h * scale);
 
   const points = [[0, 0], [hand.w, 0], [0, hand.h], [hand.w, hand.h]].map(toCss);
-  const half = stickWidth / 2;
-  points.push([stickEnd[0] - half, stickEnd[1] - half], [stickEnd[0] + half, stickEnd[1] + half]);
+  if (stick) {
+    const half = stickWidth / 2;
+    points.push([stickEnd[0] - half, stickEnd[1] - half], [stickEnd[0] + half, stickEnd[1] + half]);
+  }
 
   let lift = 0;
   let blur = 0;
@@ -125,9 +127,9 @@ function fitLength(hand, wanted, shadow) {
   return length;
 }
 
-async function drawHand(hand, length, pressed, shadow) {
+async function drawHand(hand, length, pressed, shadow, withStick = true) {
   const image = await loadHand(hand.id);
-  const L = layout(hand, length, pressed, shadow);
+  const L = layout(hand, length, pressed, shadow, withStick);
   const w = L.width * DENSITY;
   const h = L.height * DENSITY;
 
@@ -168,10 +170,12 @@ async function drawHand(hand, length, pressed, shadow) {
   k.fillStyle = fade;
   k.fillRect(-L.hotX, -L.hotY, L.width, L.height);
 
-  s.save();
-  s.setTransform(1, 0, 0, 1, 0, 0);
-  s.drawImage(stick, 0, 0);
-  s.restore();
+  if (withStick) {
+    s.save();
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    s.drawImage(stick, 0, 0);
+    s.restore();
+  }
   s.imageSmoothingQuality = 'high';
   s.rotate(L.rotation);
   s.scale(L.scale, L.scale);
@@ -233,8 +237,14 @@ export async function renderCursors(settings) {
   const wanted = (SIZES.find((s) => s.id === settings.size) || SIZES[SIZES.length - 1]).length;
   const length = fitLength(hand, wanted, settings.shadow);
   const lengths = FALLBACK_SCALES.map((f) => Math.max(10, Math.round(length * f)));
-  const idle = await Promise.all(lengths.map((l) => drawHand(hand, l, false, settings.shadow)));
-  const pressed = await Promise.all(lengths.map((l) => drawHand(hand, l, true, settings.shadow)));
+  // The smallest copy, the last before the arrow, drops the stick and shadow
+  // so it fits closer to the edges.
+  const draw = (pressedState) => Promise.all(lengths.map((l, i) => {
+    const last = i === lengths.length - 1;
+    return drawHand(hand, l, pressedState, settings.shadow && !last, !last);
+  }));
+  const idle = await draw(false);
+  const pressed = await draw(true);
   return { version: RENDER_VERSION, idle: cssValue(idle), pressed: cssValue(pressed), sound, length, preview: idle[0] };
 }
 
