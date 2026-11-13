@@ -30,7 +30,13 @@ const SLAP_WIND = 0.38;
 const SLAP_FOLLOW = 0.1;
 const IMPACT_MS = 300;
 
-let settings = null; // { style, size, shadow, sound, slap }, or null while the hand is off here
+// Drawing, from TinyHand's Ink.swift and OverlayController.drag().
+const INK_START_PX = 4; // a stroke starts once the press has moved this far
+const INK_STEP_PX = 1.5; // points closer than this to the last one are skipped
+const INK_WIDTH = 0.0055; // of the screen height, at least 3 px
+const INK_FADE_MS = 600;
+
+let settings = null; // see apply(); null while the hand is off here
 let catalog = null;
 let insertedCss = null;
 
@@ -170,8 +176,11 @@ function watchShadowRoots() {
 
 const overlay = {
   host: null,
-  canvas: null,
+  canvas: null, // the hand and stick, under the shadow filter
   ctx: null,
+  inkCanvas: null, // the drawing, under the hand and without its shadow
+  inkCtx: null,
+  strokes: [], // { points, color, width, arrow, ended }
   width: 0,
   height: 0,
   dpr: 1,
@@ -202,12 +211,17 @@ function createOverlay() {
     'pointer-events: none', 'z-index: 2147483647', 'display: block', 'contain: strict',
   ].map((rule) => `${rule} !important`).join(';');
   const root = host.attachShadow({ mode: 'closed' });
-  const canvas = document.createElement('canvas');
-  canvas.style.cssText = 'display:block;width:100%;height:100%;pointer-events:none';
-  root.append(canvas);
+  const layer = () => {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
+    return canvas;
+  };
+  overlay.inkCanvas = layer();
+  overlay.canvas = layer();
+  root.append(overlay.inkCanvas, overlay.canvas);
   overlay.host = host;
-  overlay.canvas = canvas;
-  overlay.ctx = canvas.getContext('2d');
+  overlay.ctx = overlay.canvas.getContext('2d');
+  overlay.inkCtx = overlay.inkCanvas.getContext('2d');
 }
 
 function mountOverlay() {
@@ -244,8 +258,10 @@ function resizeOverlay() {
   overlay.width = width;
   overlay.height = height;
   overlay.dpr = dpr;
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
+  for (const layer of [canvas, overlay.inkCanvas]) {
+    layer.width = Math.round(width * dpr);
+    layer.height = Math.round(height * dpr);
+  }
   schedule();
 }
 
@@ -254,6 +270,7 @@ function unmountOverlay() {
   overlay.frame = 0;
   overlay.cursor = null;
   overlay.gripX = null;
+  overlay.strokes = [];
   overlay.host?.remove();
 }
 
@@ -289,15 +306,18 @@ function draw(now) {
   overlay.frame = 0;
   const dt = overlay.lastFrame ? Math.min(64, now - overlay.lastFrame) : 16;
   overlay.lastFrame = now;
-  const { ctx, width: W, height: H, dpr } = overlay;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  const { ctx, inkCtx, width: W, height: H, dpr } = overlay;
+  for (const c of [ctx, inkCtx]) {
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+  }
+  let moving = settings ? drawInk(now) : false;
   if (!settings || !overlay.cursor) {
-    overlay.lastFrame = 0;
+    if (moving) schedule();
+    else overlay.lastFrame = 0;
     return;
   }
 
-  let moving = false;
   if (!overlay.held && overlay.press > 0.002) {
     overlay.press *= Math.max(0, 1 - PRESS_DECAY_PER_MS * dt);
     moving = true;
@@ -404,6 +424,123 @@ function drawLaser() {
   ctx.arc(cursor.x, cursor.y, r * 0.45, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+// Draws every stroke; returns true while one is still being drawn or fading.
+function drawInk(now) {
+  const { inkCtx: ctx, strokes } = overlay;
+  let busy = false;
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const stroke = strokes[i];
+    let alpha = 1;
+    if (!stroke.ended) {
+      busy = true;
+    } else if (stroke.fadeAfter > 0) {
+      const age = now - stroke.ended - stroke.fadeAfter;
+      if (age >= INK_FADE_MS) {
+        strokes.splice(i, 1);
+        continue;
+      }
+      if (age > 0) alpha = 1 - easeIn(age / INK_FADE_MS);
+      busy = true;
+    }
+    drawStroke(ctx, stroke, alpha);
+  }
+  return busy;
+}
+
+function drawStroke(ctx, stroke, alpha) {
+  const p = stroke.points;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = stroke.color;
+  ctx.lineWidth = stroke.width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.18)';
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetX = 1;
+  ctx.shadowOffsetY = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(p[0].x, p[0].y);
+  if (p.length === 1) ctx.lineTo(p[0].x, p[0].y);
+  for (let k = 1; k < p.length; k++) {
+    const mid = { x: (p[k - 1].x + p[k].x) / 2, y: (p[k - 1].y + p[k].y) / 2 };
+    ctx.quadraticCurveTo(p[k - 1].x, p[k - 1].y, mid.x, mid.y);
+  }
+  if (p.length > 1) ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+  if (stroke.arrow) addArrowHead(ctx, p, Math.max(14, stroke.width * 3.2));
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Aims the head along the last stretch of the stroke, so a wobble at the very
+// end doesn't twist it.
+function addArrowHead(ctx, points, size) {
+  const end = points[points.length - 1];
+  let back = points[0];
+  for (let i = points.length - 1; i >= 0; i--) {
+    if (Math.hypot(end.x - points[i].x, end.y - points[i].y) >= size * 1.2) {
+      back = points[i];
+      break;
+    }
+  }
+  const length = Math.hypot(end.x - back.x, end.y - back.y);
+  if (length <= 1) return;
+  const head = Math.min(size, length * 0.8);
+  const angle = Math.atan2(end.y - back.y, end.x - back.x);
+  for (const side of [-1, 1]) {
+    const a = angle + Math.PI + side * (Math.PI / 7);
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x + Math.cos(a) * head, end.y + Math.sin(a) * head);
+  }
+}
+
+function inkColor() {
+  const choice = catalog?.INKS.find((c) => c.id === settings.ink);
+  if (choice?.color) return choice.color;
+  return catalog?.STYLES.find((s) => s.id === settings.style)?.ink || '#8754f2';
+}
+
+function startInk(x, y) {
+  mountOverlay();
+  overlay.strokes.push({
+    points: [{ x, y }],
+    color: inkColor(),
+    width: Math.max(3, screenHeight() * INK_WIDTH),
+    arrow: false,
+    ended: 0,
+    fadeAfter: Math.max(0, settings.fade) * 1000,
+  });
+  schedule();
+}
+
+function currentStroke() {
+  const last = overlay.strokes[overlay.strokes.length - 1];
+  return last && !last.ended ? last : null;
+}
+
+function extendInk(x, y, arrow) {
+  const stroke = currentStroke();
+  if (!stroke) return;
+  stroke.arrow = arrow;
+  const last = stroke.points[stroke.points.length - 1];
+  if (Math.hypot(x - last.x, y - last.y) >= INK_STEP_PX) stroke.points.push({ x, y });
+  schedule();
+}
+
+function endInk(arrow) {
+  const stroke = currentStroke();
+  if (!stroke) return;
+  stroke.arrow = arrow;
+  stroke.ended = performance.now();
+  schedule();
+}
+
+function clearInk() {
+  if (!overlay.strokes.length) return;
+  overlay.strokes = [];
+  schedule();
 }
 
 const easeOut = (k) => 1 - (1 - k) ** 3;
@@ -526,9 +663,13 @@ function leaveSoon() {
 
 // Each frame passes pointer events to its parent in its own coordinates; the
 // parent adds the iframe's position and passes them on, up to the top frame.
-function route(type, x, y, buttons) {
+function route(type, x, y, buttons = 0, arrow = false) {
   if (IS_TOP) {
-    if (type === 'down') pressAt(x, y);
+    if (type === 'ink-start') startInk(x, y);
+    else if (type === 'ink-move') { pointAt(x, y); extendInk(x, y, arrow); }
+    else if (type === 'ink-end') endInk(arrow);
+    else if (type === 'clear') clearInk();
+    else if (type === 'down') pressAt(x, y);
     else if (type === 'up') { pointAt(x, y); releaseHand(); }
     else if (type === 'leave') leaveSoon();
     else if (type === 'release') releaseHand();
@@ -538,7 +679,7 @@ function route(type, x, y, buttons) {
       if (!(buttons & 1)) releaseHand();
     }
   } else {
-    window.parent.postMessage({ [MESSAGE_KEY]: type, x, y, buttons }, '*');
+    window.parent.postMessage({ [MESSAGE_KEY]: type, x, y, buttons, arrow }, '*');
   }
 }
 
@@ -558,49 +699,81 @@ window.addEventListener('message', (event) => {
   const style = getComputedStyle(frame);
   const x = data.x + rect.left + frame.clientLeft + (parseFloat(style.paddingLeft) || 0);
   const y = data.y + rect.top + frame.clientTop + (parseFloat(style.paddingTop) || 0);
-  route(data[MESSAGE_KEY], x, y, data.buttons);
+  route(data[MESSAGE_KEY], x, y, data.buttons, data.arrow === true);
 });
 
 function counts(event) {
   return settings && event.pointerType !== 'touch';
 }
 
+// A Shift-press in this frame that may become a stroke: { x, y, drawing }.
+let gesture = null;
+
 window.addEventListener('pointermove', (event) => {
   if (!counts(event)) return;
-  lastPointer = { x: event.clientX, y: event.clientY };
-  if (settings.slap && event.altKey) highlight(slapTarget(event.clientX, event.clientY));
+  const { clientX: x, clientY: y } = event;
+  lastPointer = { x, y };
+  if (settings.slap && event.altKey && !gesture) highlight(slapTarget(x, y));
   else unhighlight();
-  route('move', event.clientX, event.clientY, event.buttons);
+  if (gesture) {
+    if (!gesture.drawing && Math.hypot(x - gesture.x, y - gesture.y) >= INK_START_PX) {
+      gesture.drawing = true;
+      mute(['mouseup', 'click', 'dblclick']);
+      route('ink-start', gesture.x, gesture.y);
+    }
+    if (gesture.drawing) {
+      route('ink-move', x, y, event.buttons, event.metaKey);
+      return;
+    }
+  }
+  route('move', x, y, event.buttons);
 }, true);
 
 window.addEventListener('pointerdown', (event) => {
   if (!counts(event)) return;
+  const { clientX: x, clientY: y } = event;
   if (event.button === 0 && event.altKey && settings.slap) {
     swallow(event);
-    slapClick = true;
-    clearTimeout(slapClickTimer);
-    slapClickTimer = setTimeout(() => { slapClick = false; }, 800);
-    slapAt(event.clientX, event.clientY);
+    mute(['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']);
+    slapAt(x, y);
     return;
   }
+  // Shift-press: the page doesn't see the mousedown, so it starts no text
+  // selection or drag. If the press never moves, its click still goes through.
+  if (event.button === 0 && event.shiftKey && settings.draw && !isEditable(event.composedPath()[0])) {
+    swallow(event);
+    mute(['mousedown']);
+    gesture = { x, y, drawing: false };
+  }
   if (event.button === 0) {
-    route('down', event.clientX, event.clientY, event.buttons);
+    route('down', x, y, event.buttons);
     if (settings.sound) playTap(settings.sound);
   } else {
-    route('move', event.clientX, event.clientY, event.buttons);
+    route('move', x, y, event.buttons);
   }
 }, true);
 
 window.addEventListener('pointerup', (event) => {
-  if (slapClick) {
-    swallow(event);
-    return;
+  if (muted) unmuteSoon();
+  if (gesture) {
+    if (gesture.drawing) route('ink-end', event.clientX, event.clientY, 0, event.metaKey);
+    gesture = null;
   }
+  if (muted?.has('mouseup')) swallow(event);
   if (!counts(event)) return;
   route('up', event.clientX, event.clientY, event.buttons);
 }, true);
 
-window.addEventListener('pointercancel', () => settings && route('release', 0, 0, 0), true);
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settings) route('clear', 0, 0);
+}, true);
+
+window.addEventListener('pointercancel', () => {
+  if (!settings) return;
+  if (gesture?.drawing) route('ink-end', 0, 0);
+  gesture = null;
+  route('release', 0, 0);
+}, true);
 window.addEventListener('blur', () => IS_TOP && releaseHand());
 
 document.addEventListener('pointerout', (event) => {
@@ -639,21 +812,34 @@ if (IS_TOP) {
 let lastPointer = null;
 let highlighted = null; // { el, outline, offset } with the inline values to restore
 const slapped = []; // { el, display } for Option-Z, newest last
-let slapClick = false; // swallow this click's remaining events
-let slapClickTimer = 0;
+let muted = null; // Set of mouse event types the page shouldn't see for this press
+let mutedTimer = 0;
 
 function swallow(event) {
   event.preventDefault();
   event.stopImmediatePropagation();
 }
 
-// The page sees none of a slap's events, so an Option-click on a link
-// doesn't download it and a button doesn't fire.
+function mute(types) {
+  clearTimeout(mutedTimer);
+  muted = new Set([...(muted || []), ...types]);
+}
+
+// The click, if any, follows the pointerup right away; this only cleans up a
+// press whose click never comes.
+function unmuteSoon() {
+  clearTimeout(mutedTimer);
+  mutedTimer = setTimeout(() => { muted = null; }, 400);
+}
+
+// A slap hides all of its click from the page, so an Option-click on a link
+// doesn't download it and a button doesn't fire. A stroke hides its mouseup
+// and click, so drawing over a button doesn't press it.
 for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
   window.addEventListener(type, (event) => {
-    if (!slapClick) return;
+    if (!muted?.has(type)) return;
     swallow(event);
-    if (type === 'click') slapClick = false;
+    if (type === 'click') muted = null;
   }, true);
 }
 
@@ -774,7 +960,7 @@ function topHostname() {
 }
 
 async function apply() {
-  const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound', 'slap']);
+  const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound', 'slap', 'draw', 'ink', 'fade']);
   const style = stored.style || 'glove';
   const off = stored.enabled === false || (stored.disabledSites || []).includes(topHostname());
   if (off) {
@@ -790,7 +976,16 @@ async function apply() {
   const laserSound = stored.laserSound === true;
   const sound = !handSound || (style === 'laser' && !laserSound) ? null : (stored.sound || 'click');
   const previousStyle = settings?.style;
-  settings = { style, size: stored.size || 'medium', shadow: stored.shadow !== false, sound, slap: stored.slap !== false };
+  settings = {
+    style,
+    size: stored.size || 'medium',
+    shadow: stored.shadow !== false,
+    sound,
+    slap: stored.slap !== false,
+    draw: stored.draw !== false,
+    ink: stored.ink || 'match',
+    fade: Number.isFinite(stored.fade) ? stored.fade : 3,
+  };
   if (!settings.slap) unhighlight();
 
   setStyles(HIDE_CSS);

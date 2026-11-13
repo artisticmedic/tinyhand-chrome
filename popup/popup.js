@@ -13,8 +13,9 @@ document.getElementById('styles').append(grid.grid);
 const sound = soundPicker(settings);
 const size = sizePicker(settings);
 const shadow = switchRow('Shadow', 'shadow', settings);
+const draw = switchRow('Shift-drag draws', 'draw', settings, 'Hold ⌘ for an arrow, Esc clears');
 const slap = switchRow('⌥-click slaps things off', 'slap', settings, '⌥Z puts the last one back');
-document.getElementById('options').append(sound.row, size.row, shadow.row, slap.row);
+document.getElementById('options').append(sound.row, size.row, shadow.row, draw.row, slap.row);
 
 // "Off on this site" needs the active tab's host, which activeTab grants
 // while the popup is open. Pages like chrome:// have none.
@@ -45,6 +46,7 @@ function render(s) {
   sound.sync(s);
   size.sync(s.size);
   shadow.input.checked = s.shadow;
+  draw.input.checked = s.draw;
   slap.input.checked = s.slap;
 }
 render(settings);

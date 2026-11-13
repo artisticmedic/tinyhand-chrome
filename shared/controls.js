@@ -2,7 +2,7 @@
 // Settings page. Each control writes straight to chrome.storage.local; the
 // service worker redraws the cursor from there.
 
-import { DEFAULTS, HANDS, PINNED, SETTING_KEYS, SIZES, SOUNDS, STYLES } from './catalog.js';
+import { DEFAULTS, FADES, HANDS, INKS, PINNED, SETTING_KEYS, SIZES, SOUNDS, STYLES } from './catalog.js';
 
 export async function readSettings() {
   return { ...DEFAULTS, ...(await chrome.storage.local.get(SETTING_KEYS)) };
@@ -112,6 +112,43 @@ export function sizePicker(settings) {
   const row = el('div', { class: 'row' }, [
     el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: 'Size' })]),
     group,
+  ]);
+  return { row, sync };
+}
+
+export function inkPicker(settings) {
+  const group = el('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Ink colour' });
+  const buttons = INKS.map((ink) => {
+    const button = el('button', {
+      type: 'button', role: 'radio', class: 'swatch', title: ink.name, 'aria-label': ink.name,
+      dataset: { ink: ink.id }, onclick: () => save({ ink: ink.id }),
+    });
+    if (ink.color) button.style.setProperty('--swatch', ink.color);
+    else button.classList.add('match');
+    return button;
+  });
+  group.append(...buttons);
+  const sync = (s) => {
+    const own = STYLES.find((style) => style.id === s.style)?.ink;
+    group.style.setProperty('--match', own || '#8754f2');
+    for (const b of buttons) b.setAttribute('aria-checked', String(b.dataset.ink === s.ink));
+  };
+  sync(settings);
+  const row = el('div', { class: 'row' }, [
+    el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: 'Ink colour' })]),
+    group,
+  ]);
+  return { row, sync };
+}
+
+export function fadePicker(settings) {
+  const select = el('select', { 'aria-label': 'Lines fade', onchange: () => save({ fade: Number(select.value) }) },
+    FADES.map((f) => el('option', { value: String(f.value), textContent: f.name })));
+  const sync = (s) => { select.value = String(s.fade); };
+  sync(settings);
+  const row = el('div', { class: 'row' }, [
+    el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: 'Lines fade' })]),
+    select,
   ]);
   return { row, sync };
 }

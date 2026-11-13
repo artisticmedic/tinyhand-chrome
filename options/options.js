@@ -1,4 +1,4 @@
-import { el, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
+import { el, fadePicker, inkPicker, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
 
 const settings = await readSettings();
 
@@ -11,6 +11,11 @@ document.getElementById('styles').append(grid.grid);
 const size = sizePicker(settings);
 const shadow = switchRow('Shadow under the hand', 'shadow', settings);
 document.getElementById('appearance').append(size.row, shadow.row);
+
+const draw = switchRow('Shift-drag draws', 'draw', settings, 'Hold ⌘ as well to finish with an arrow. Esc clears the drawing.');
+const ink = inkPicker(settings);
+const fade = fadePicker(settings);
+document.getElementById('draw').append(draw.row, ink.row, fade.row);
 
 const slap = switchRow('Slap things off the page', 'slap', settings, 'Hold ⌥ to outline what the hand is over, ⌥-click to slap it away. ⌥Z puts the last one back; reloading brings everything back.');
 document.getElementById('slap').append(slap.row);
@@ -50,6 +55,9 @@ function render(s) {
   size.sync(s.size);
   shadow.input.checked = s.shadow;
   slap.input.checked = s.slap;
+  draw.input.checked = s.draw;
+  ink.sync(s);
+  fade.sync(s);
   sound.sync(s);
   laser.input.checked = s.laserSound;
   laser.input.disabled = !s.handSound;

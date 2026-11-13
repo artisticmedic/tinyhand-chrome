@@ -34,4 +34,6 @@ h2 {
 
 body.off #styles,
 body.off #appearance,
-body.off #sound { opacity: 0.45; }
+body.off #sound,
+body.off #draw,
+body.off #slap { opacity: 0.45; }
