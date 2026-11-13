@@ -9,6 +9,7 @@ import os from 'node:os';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_CORE || 'playwright-core');
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const ext = process.env.EXT_DIR || root;
 const out = path.join(root, 'out');
 mkdirSync(out, { recursive: true });
 const exe = process.env.CHROMIUM || path.join(os.homedir(), 'Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
@@ -16,7 +17,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const context = await chromium.launchPersistentContext(path.join(os.tmpdir(), `tinyhand-slap-${Date.now()}`), {
   executablePath: exe, headless: true,
-  args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`],
+  args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
   viewport: { width: 1280, height: 800 }, screen: { width: 1512, height: 982 }, deviceScaleFactor: 1,
 });
 let [worker] = context.serviceWorkers();

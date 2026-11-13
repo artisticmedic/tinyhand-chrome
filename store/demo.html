@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Launch review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: #1d1d21;
+      background: #f6f5f2;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 40px;
+      background: #fff;
+      border-bottom: 1px solid #e8e6e1;
+    }
+    .logo { width: 26px; height: 26px; border-radius: 7px; background: #1d1d21; }
+    header nav { display: flex; gap: 22px; margin-left: 28px; color: #6b6b75; font-size: 14px; }
+    header nav b { color: #1d1d21; font-weight: 600; }
+    .avatar { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: #d9cfc0; }
+    main { max-width: 1120px; margin: 0 auto; padding: 36px 40px; }
+    .eyebrow { font-size: 13px; font-weight: 600; color: #8754f2; letter-spacing: 0.02em; }
+    h1 { font-size: 34px; line-height: 1.15; margin: 6px 0 8px; letter-spacing: -0.02em; }
+    .lede { color: #55555e; max-width: 620px; margin: 0 0 28px; }
+    .grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; }
+    .card { background: #fff; border: 1px solid #e8e6e1; border-radius: 14px; padding: 20px 22px; }
+    .card h2 { font-size: 15px; margin: 0 0 14px; }
+    .bars { display: flex; align-items: flex-end; gap: 14px; height: 170px; padding-top: 10px; }
+    .bar { flex: 1; border-radius: 6px 6px 2px 2px; background: #e4def5; position: relative; }
+    .bar.hi { background: #8754f2; }
+    .bar span { position: absolute; bottom: -22px; left: 0; right: 0; text-align: center; font-size: 12px; color: #6b6b75; }
+    .stats { display: grid; gap: 12px; }
+    .stat { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 0; border-bottom: 1px solid #f0eee9; }
+    .stat:last-child { border-bottom: 0; }
+    .stat b { font-size: 22px; letter-spacing: -0.01em; }
+    .stat small { color: #16a87a; font-weight: 600; }
+    .tasks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+    .task { background: #fff; border: 1px solid #e8e6e1; border-radius: 12px; padding: 16px 18px; }
+    .task .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #fff1d6; color: #8a5a00; }
+    .task.done .tag { background: #dff5ec; color: #0f7a57; }
+    .task.risk .tag { background: #ffe1e1; color: #b3261e; }
+    .task p { margin: 10px 0 0; font-weight: 500; }
+    .task small { color: #6b6b75; }
+    .actions { display: flex; gap: 10px; margin-top: 24px; }
+    .btn { border: 0; border-radius: 10px; padding: 10px 18px; font: inherit; font-weight: 600; background: #1d1d21; color: #fff; }
+    .btn.ghost { background: #fff; color: #1d1d21; border: 1px solid #dedbd4; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo"></div>
+    <strong>Northwind</strong>
+    <nav><b>Launch</b><span>Roadmap</span><span>Metrics</span><span>Team</span></nav>
+    <div class="avatar"></div>
+  </header>
+  <main>
+    <div class="eyebrow">Launch review · Week 46</div>
+    <h1 id="headline">Sign-ups are up 38% since the new onboarding</h1>
+    <p class="lede">The guided setup shipped on Monday. Here's what moved, what's left, and the one thing that could still slip.</p>
+    <div class="grid">
+      <section class="card">
+        <h2>Weekly sign-ups</h2>
+        <div class="bars">
+          <div class="bar" style="height: 42%"><span>W40</span></div>
+          <div class="bar" style="height: 48%"><span>W41</span></div>
+          <div class="bar" style="height: 45%"><span>W42</span></div>
+          <div class="bar" style="height: 52%"><span>W43</span></div>
+          <div class="bar" style="height: 55%"><span>W44</span></div>
+          <div class="bar" style="height: 61%"><span>W45</span></div>
+          <div class="bar hi" id="peak" style="height: 88%"><span>W46</span></div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>This week</h2>
+        <div class="stats">
+          <div class="stat"><span>New sign-ups</span><b>12,480</b></div>
+          <div class="stat"><span>Finished setup</span><b>71%</b><small>+19 pts</small></div>
+          <div class="stat"><span>Time to first project</span><b>4m 10s</b><small>−2m</small></div>
+        </div>
+      </section>
+    </div>
+    <div class="tasks">
+      <div class="task done" id="task-done"><span class="tag">Done</span><p>Guided setup</p><small>Shipped Monday</small></div>
+      <div class="task" id="task-progress"><span class="tag">In progress</span><p>Invite teammates step</p><small>Review on Thursday</small></div>
+      <div class="task risk" id="task-risk"><span class="tag">At risk</span><p>Old welcome email</p><small>Still sending to new users</small></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="ship">Ship the email fix</button>
+      <button class="btn ghost">Share report</button>
+    </div>
+  </main>
+</body>
+</html>
