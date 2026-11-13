@@ -84,6 +84,7 @@ export const DEFAULTS = {
   sound: 'click',
   handSound: true,
   laserSound: false,
+  slap: true,
   disabledSites: [],
 };
 

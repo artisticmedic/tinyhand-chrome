@@ -19,7 +19,18 @@ const LIFT = 0.06; // shadow distance
 const PRESS_SCALE = 0.06; // the hand shrinks 6% on a tap
 const PRESS_DECAY_PER_MS = 0.011; // 0.18 per frame at 60 fps
 
-let settings = null; // { style, size, shadow, sound }, or null while the hand is off here
+// The slap: the stick winds back to the right, swings through the target and
+// past it, then settles. Times in ms from the click, angles in radians about
+// the grip. The swing crosses the target at SLAP_IMPACT_MS.
+const SLAP_WIND_MS = 110;
+const SLAP_HIT_MS = 170;
+const SLAP_END_MS = 430;
+const SLAP_IMPACT_MS = 165;
+const SLAP_WIND = 0.38;
+const SLAP_FOLLOW = 0.1;
+const IMPACT_MS = 300;
+
+let settings = null; // { style, size, shadow, sound, slap }, or null while the hand is off here
 let catalog = null;
 let insertedCss = null;
 
@@ -48,6 +59,40 @@ function playTap(id) {
     // Fails when the extension was reloaded under this page; retry next click.
     () => buffers.delete(id)
   );
+}
+
+// A slap, made rather than recorded: a burst of band-passed noise over a short
+// falling thump, scheduled `delay` seconds ahead to land on the impact.
+function playSlap(delay) {
+  audioContext ??= new AudioContext();
+  const ctx = audioContext;
+  if (ctx.state === 'suspended') ctx.resume();
+  const when = ctx.currentTime + delay;
+
+  const length = Math.floor(ctx.sampleRate * 0.18);
+  const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.022));
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const band = ctx.createBiquadFilter();
+  band.type = 'bandpass';
+  band.frequency.value = 1600;
+  band.Q.value = 0.8;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 1.4;
+  noise.connect(band).connect(noiseGain).connect(ctx.destination);
+  noise.start(when);
+
+  const thump = ctx.createOscillator();
+  thump.frequency.setValueAtTime(160, when);
+  thump.frequency.exponentialRampToValueAtTime(60, when + 0.08);
+  const thumpGain = ctx.createGain();
+  thumpGain.gain.setValueAtTime(0.6, when);
+  thumpGain.gain.exponentialRampToValueAtTime(0.001, when + 0.12);
+  thump.connect(thumpGain).connect(ctx.destination);
+  thump.start(when);
+  thump.stop(when + 0.13);
 }
 
 // ---------------------------------------------------------------- hiding the cursor
@@ -140,6 +185,8 @@ const overlay = {
   frame: 0,
   hideTimer: 0,
   filter: '',
+  slap: null, // { start } while the slap animation runs
+  impact: null, // { x, y, start } for the burst where the slap lands
 };
 
 function createOverlay() {
@@ -257,13 +304,16 @@ function draw(now) {
   } else if (!overlay.held) {
     overlay.press = 0;
   }
-  updateShadow();
+  const slap = slapPose(now);
+  if (slap.active) moving = true;
+  updateShadow(slap);
 
   if (settings.style === 'laser') {
     drawLaser();
-  } else if (drawHand(dt)) {
+  } else if (drawHand(dt, slap)) {
     moving = true;
   }
+  if (drawImpact(now)) moving = true;
   if (moving) schedule();
   else overlay.lastFrame = 0;
 }
@@ -271,7 +321,7 @@ function draw(now) {
 // TinyHand's ArmView.aim(cursor:): the stick is held below the bottom edge,
 // to the right of the pointer, and the hand turns so its fingertip lands on
 // the pointer. The grip trails the pointer, so the stick swings as you move.
-function drawHand(dt) {
+function drawHand(dt, slap) {
   const hand = catalog?.HANDS.find((h) => h.id === settings.style);
   const image = overlay.image;
   if (!hand || !image) return false;
@@ -281,7 +331,8 @@ function drawHand(dt) {
   const sizeFrac = (catalog.SIZES.find((s) => s.id === settings.size) || catalog.SIZES[1]).frac;
   const [tx, ty] = hand.tip;
   const [wx, wy] = hand.wrist;
-  const handLength = sizeFrac * screenH * (1 - PRESS_SCALE * overlay.press);
+  const press = Math.max(overlay.press, slap.press);
+  const handLength = sizeFrac * screenH * (1 - PRESS_SCALE * press) * slap.scale;
   const s = handLength / Math.hypot(wx - tx, wy - ty);
 
   const targetX = Math.min(Math.max(cursor.x + GRIP_LEAN * W, W * 0.15), W * 1.05);
@@ -314,6 +365,10 @@ function drawHand(dt) {
   shade.addColorStop(0.55, hand.stick[0]);
   shade.addColorStop(1, hand.stick[2]);
   ctx.save();
+  // The slap turns the whole stick about the grip.
+  ctx.translate(grip.x, grip.y);
+  ctx.rotate(slap.swing);
+  ctx.translate(-grip.x, -grip.y);
   ctx.strokeStyle = shade;
   ctx.lineWidth = stickWidth;
   ctx.lineCap = 'round';
@@ -351,14 +406,74 @@ function drawLaser() {
   ctx.restore();
 }
 
+const easeOut = (k) => 1 - (1 - k) ** 3;
+const easeIn = (k) => k * k * k;
+
+// Where the slap is at `now`: the swing about the grip, the hand's scale (it
+// lifts toward you on the wind-up) and how pressed it is.
+function slapPose(now) {
+  const rest = { swing: 0, scale: 1, press: 0, active: false };
+  if (!overlay.slap) return rest;
+  const t = now - overlay.slap.start;
+  if (t >= SLAP_END_MS) {
+    overlay.slap = null;
+    return rest;
+  }
+  if (t < SLAP_WIND_MS) {
+    const k = easeOut(t / SLAP_WIND_MS);
+    return { swing: SLAP_WIND * k, scale: 1 + 0.12 * k, press: 0, active: true };
+  }
+  if (t < SLAP_HIT_MS) {
+    const k = easeIn((t - SLAP_WIND_MS) / (SLAP_HIT_MS - SLAP_WIND_MS));
+    return { swing: SLAP_WIND - (SLAP_WIND + SLAP_FOLLOW) * k, scale: 1.12 - 0.2 * k, press: k, active: true };
+  }
+  const back = 1 - easeOut((t - SLAP_HIT_MS) / (SLAP_END_MS - SLAP_HIT_MS));
+  return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: back, active: true };
+}
+
+// A ring and a few speed lines where the slap lands.
+function drawImpact(now) {
+  const impact = overlay.impact;
+  if (!impact) return false;
+  const t = now - impact.start;
+  if (t < 0) return true;
+  if (t >= IMPACT_MS) {
+    overlay.impact = null;
+    return false;
+  }
+  const k = easeOut(t / IMPACT_MS);
+  const { ctx } = overlay;
+  const r = 10 + 46 * k;
+  ctx.save();
+  ctx.globalAlpha = 1 - k;
+  ctx.strokeStyle = '#8754f2';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 4 * (1 - k) + 1;
+  ctx.beginPath();
+  ctx.arc(impact.x, impact.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI * 0.95 + (i / 6) * Math.PI * 1.1;
+    ctx.beginPath();
+    ctx.moveTo(impact.x + Math.cos(a) * (r + 6), impact.y + Math.sin(a) * (r + 6));
+    ctx.lineTo(impact.x + Math.cos(a) * (r + 18 + 10 * k), impact.y + Math.sin(a) * (r + 18 + 10 * k));
+    ctx.stroke();
+  }
+  ctx.restore();
+  return true;
+}
+
 // TinyHand's shadow falls down and to the right and tucks in on a tap. A CSS
 // drop-shadow on the whole overlay keeps the stick and hand one shape.
-function updateShadow() {
+function updateShadow(slap) {
   let filter = 'none';
   if (settings.shadow && settings.style !== 'laser') {
-    const lift = LIFT * screenHeight() * (1 - 0.8 * overlay.press);
-    const blur = Math.max(1, lift * 0.35) + 5 * overlay.press;
-    const alpha = 0.26 + 0.02 * overlay.press;
+    const press = Math.max(overlay.press, slap.press);
+    const raise = slap.scale > 1 ? 1 + (slap.scale - 1) * 3 : 1;
+    const lift = LIFT * screenHeight() * (1 - 0.8 * press) * raise;
+    const blur = Math.max(1, lift * 0.35) + 5 * press;
+    const alpha = 0.26 + 0.02 * press;
     filter = `drop-shadow(${(lift * 0.6).toFixed(1)}px ${lift.toFixed(1)}px ${blur.toFixed(1)}px rgba(0,0,0,${alpha.toFixed(3)}))`;
   }
   if (filter !== overlay.filter) {
@@ -381,6 +496,14 @@ function pressAt(x, y) {
   pointAt(x, y);
   overlay.held = true;
   overlay.press = 1;
+  schedule();
+}
+
+function startSlap(x, y) {
+  pointAt(x, y);
+  const now = performance.now();
+  overlay.slap = { start: now };
+  overlay.impact = { x, y, start: now + SLAP_IMPACT_MS };
   schedule();
 }
 
@@ -409,6 +532,7 @@ function route(type, x, y, buttons) {
     else if (type === 'up') { pointAt(x, y); releaseHand(); }
     else if (type === 'leave') leaveSoon();
     else if (type === 'release') releaseHand();
+    else if (type === 'slap') startSlap(x, y);
     else {
       pointAt(x, y);
       if (!(buttons & 1)) releaseHand();
@@ -443,11 +567,22 @@ function counts(event) {
 
 window.addEventListener('pointermove', (event) => {
   if (!counts(event)) return;
+  lastPointer = { x: event.clientX, y: event.clientY };
+  if (settings.slap && event.altKey) highlight(slapTarget(event.clientX, event.clientY));
+  else unhighlight();
   route('move', event.clientX, event.clientY, event.buttons);
 }, true);
 
 window.addEventListener('pointerdown', (event) => {
   if (!counts(event)) return;
+  if (event.button === 0 && event.altKey && settings.slap) {
+    swallow(event);
+    slapClick = true;
+    clearTimeout(slapClickTimer);
+    slapClickTimer = setTimeout(() => { slapClick = false; }, 800);
+    slapAt(event.clientX, event.clientY);
+    return;
+  }
   if (event.button === 0) {
     route('down', event.clientX, event.clientY, event.buttons);
     if (settings.sound) playTap(settings.sound);
@@ -457,6 +592,10 @@ window.addEventListener('pointerdown', (event) => {
 }, true);
 
 window.addEventListener('pointerup', (event) => {
+  if (slapClick) {
+    swallow(event);
+    return;
+  }
   if (!counts(event)) return;
   route('up', event.clientX, event.clientY, event.buttons);
 }, true);
@@ -490,6 +629,135 @@ if (IS_TOP) {
   });
 }
 
+// ---------------------------------------------------------------- slap to remove
+//
+// Hold Option (Alt) to outline the element under the hand; Option-click slaps
+// it off the page, like VisBug's delete. Option-Z puts the last one back. The
+// element is hidden with display: none, not removed, so the page's own scripts
+// still find it, and a reload brings everything back.
+
+let lastPointer = null;
+let highlighted = null; // { el, outline, offset } with the inline values to restore
+const slapped = []; // { el, display } for Option-Z, newest last
+let slapClick = false; // swallow this click's remaining events
+let slapClickTimer = 0;
+
+function swallow(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+// The page sees none of a slap's events, so an Option-click on a link
+// doesn't download it and a button doesn't fire.
+for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
+  window.addEventListener(type, (event) => {
+    if (!slapClick) return;
+    swallow(event);
+    if (type === 'click') slapClick = false;
+  }, true);
+}
+
+function deepElementFromPoint(x, y) {
+  let el = document.elementFromPoint(x, y);
+  for (let depth = 0; el && depth < 32; depth++) {
+    const root = el.shadowRoot || (el.localName.includes('-') && el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null);
+    const inner = root?.elementFromPoint(x, y);
+    if (!inner || inner === el) break;
+    el = inner;
+  }
+  return el;
+}
+
+// The innermost box under the pointer that's worth slapping: not inline, not
+// tiny, and not the whole document.
+function slapTarget(x, y) {
+  let el = deepElementFromPoint(x, y);
+  while (el && el !== document.documentElement && el !== document.body) {
+    if (el.style && el !== overlay.host) {
+      const display = getComputedStyle(el).display;
+      const rect = el.getBoundingClientRect();
+      if (display !== 'inline' && display !== 'contents' && rect.width >= 24 && rect.height >= 16) return el;
+    }
+    el = el.parentElement || el.getRootNode()?.host || null;
+  }
+  return null;
+}
+
+function saveProp(el, prop) {
+  return [el.style.getPropertyValue(prop), el.style.getPropertyPriority(prop)];
+}
+
+function restoreProp(el, prop, [value, priority]) {
+  if (value) el.style.setProperty(prop, value, priority);
+  else el.style.removeProperty(prop);
+}
+
+function highlight(el) {
+  if (highlighted?.el === el) return;
+  unhighlight();
+  if (!el) return;
+  highlighted = { el, outline: saveProp(el, 'outline'), offset: saveProp(el, 'outline-offset') };
+  el.style.setProperty('outline', '2px solid rgba(135, 84, 242, 0.95)', 'important');
+  el.style.setProperty('outline-offset', '-2px', 'important');
+}
+
+function unhighlight() {
+  if (!highlighted) return;
+  const { el, outline, offset } = highlighted;
+  highlighted = null;
+  restoreProp(el, 'outline', outline);
+  restoreProp(el, 'outline-offset', offset);
+}
+
+function slapAt(x, y) {
+  const el = slapTarget(x, y);
+  unhighlight();
+  route('slap', x, y, 0);
+  if (settings.sound) playSlap(SLAP_IMPACT_MS / 1000);
+  if (el) setTimeout(() => knockOff(el), SLAP_IMPACT_MS);
+}
+
+// Knocked away to the left, the way the swing goes, then hidden.
+function knockOff(el) {
+  slapped.push({ el, display: saveProp(el, 'display') });
+  const rect = el.getBoundingClientRect();
+  const dx = -(rect.right + 120);
+  const animation = el.animate([
+    { transform: 'none', opacity: 1 },
+    { transform: `translate(${dx * 0.35}px, -30px) rotate(-10deg)`, opacity: 1, offset: 0.25 },
+    { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
+  ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
+  const hide = () => {
+    el.style.setProperty('display', 'none', 'important');
+    animation.cancel();
+  };
+  animation.finished.then(hide, hide);
+}
+
+function unslap() {
+  const last = slapped.pop();
+  if (!last) return false;
+  restoreProp(last.el, 'display', last.display);
+  last.el.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
+  return true;
+}
+
+function isEditable(target) {
+  return target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '');
+}
+
+window.addEventListener('keydown', (event) => {
+  if (!settings?.slap) return;
+  if (event.key === 'Alt' && lastPointer) highlight(slapTarget(lastPointer.x, lastPointer.y));
+  if (event.altKey && event.code === 'KeyZ' && !isEditable(event.target) && unslap()) swallow(event);
+}, true);
+
+window.addEventListener('keyup', (event) => {
+  if (event.key === 'Alt') unhighlight();
+}, true);
+
+window.addEventListener('blur', unhighlight);
+
 // ---------------------------------------------------------------- settings
 
 // The hand is off on a site when the top frame's host is on the list. Frames
@@ -506,11 +774,12 @@ function topHostname() {
 }
 
 async function apply() {
-  const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound']);
+  const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound', 'slap']);
   const style = stored.style || 'glove';
   const off = stored.enabled === false || (stored.disabledSites || []).includes(topHostname());
   if (off) {
     settings = null;
+    unhighlight();
     setStyles(null);
     shadowSheet.replaceSync('');
     if (IS_TOP) unmountOverlay();
@@ -521,7 +790,8 @@ async function apply() {
   const laserSound = stored.laserSound === true;
   const sound = !handSound || (style === 'laser' && !laserSound) ? null : (stored.sound || 'click');
   const previousStyle = settings?.style;
-  settings = { style, size: stored.size || 'medium', shadow: stored.shadow !== false, sound };
+  settings = { style, size: stored.size || 'medium', shadow: stored.shadow !== false, sound, slap: stored.slap !== false };
+  if (!settings.slap) unhighlight();
 
   setStyles(HIDE_CSS);
   shadowSheet.replaceSync('* { cursor: none !important; }');

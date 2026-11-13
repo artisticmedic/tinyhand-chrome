@@ -9,6 +9,9 @@ your pointer in Chrome and other Chromium browsers, with its tap sounds. A port 
   sound plays. 15 sounds, or off.
 - Size (TinyHand's 10%, 13% or 17% of the screen height), shadow, and per-site
   off switches in the popup and on the Settings page.
+- Slap things off the page, like VisBug's delete: hold ⌥ to outline what the
+  hand is over, ⌥-click to slap it away. ⌥Z puts the last one back; a reload
+  brings everything back. The page never sees the click.
 - Shortcuts: ⌥⇧H turns the hand on or off, ⌥⇧T turns the tap sound on or off.
 
 ## Load it
@@ -37,6 +40,7 @@ clicks reach the page.
 ## Differences from the Mac app
 
 - Clicks still click. In TinyHand a click is only a tap.
+- Slap to remove is new; TinyHand has nothing like it.
 - No drawing, no toolbar, no custom hands.
 - The hand only shows inside web pages, not over the browser's own UI or on
   pages extensions can't run on (`chrome://` pages, the Web Store).

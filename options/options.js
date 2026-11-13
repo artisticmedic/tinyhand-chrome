@@ -12,6 +12,9 @@ const size = sizePicker(settings);
 const shadow = switchRow('Shadow under the hand', 'shadow', settings);
 document.getElementById('appearance').append(size.row, shadow.row);
 
+const slap = switchRow('Slap things off the page', 'slap', settings, 'Hold ⌥ to outline what the hand is over, ⌥-click to slap it away. ⌥Z puts the last one back; reloading brings everything back.');
+document.getElementById('slap').append(slap.row);
+
 const sound = soundPicker(settings);
 const laser = switchRow('Laser dot taps too', 'laserSound', settings, 'Off by default, for quiet pointing.');
 document.getElementById('sound').append(sound.row, laser.row);
@@ -46,6 +49,7 @@ function render(s) {
   grid.sync(s.style);
   size.sync(s.size);
   shadow.input.checked = s.shadow;
+  slap.input.checked = s.slap;
   sound.sync(s);
   laser.input.checked = s.laserSound;
   laser.input.disabled = !s.handSound;
