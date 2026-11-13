@@ -3,7 +3,7 @@
   "name": "TinyHand",
   "version": "1.0.0",
   "description": "A tiny hand on a stick that points at things on any site. Shift-drag to draw, \u2325-click to slap. A port of Kamran Ahmed's TinyHand.",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "126",
   "permissions": [
     "storage",
     "scripting"

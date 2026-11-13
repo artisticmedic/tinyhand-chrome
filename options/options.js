@@ -49,9 +49,8 @@ function renderSites(list) {
     el('span', { textContent: host }),
     el('button', {
       type: 'button', class: 'link', textContent: 'Turn back on',
-      // Read the list fresh, so a change made in the popup meanwhile isn't lost.
       onclick: async () => {
-        const { disabledSites = [] } = await chrome.storage.local.get('disabledSites');
+        const { disabledSites } = await chrome.storage.local.get({ disabledSites: [] });
         save({ disabledSites: disabledSites.filter((h) => h !== host) });
       },
     }),

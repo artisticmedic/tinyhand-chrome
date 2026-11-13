@@ -1,5 +1,3 @@
-# Builds a contact sheet from guest screenshots: one crop around the pointer per shot.
-# usage: python3 tools/contact.py OUT.png "label|shot.png|x|y" ...   (x, y in screen points)
 import sys
 from PIL import Image, ImageDraw, ImageFont
 

@@ -1,5 +1,3 @@
-# Scales the raw 2x captures to the store's exact sizes and puts the popup
-# onto the robot screenshot. Usage: python3 store-compose.py RAW_DIR OUT_DIR
 import sys
 from PIL import Image, ImageFilter
 
@@ -15,7 +13,6 @@ fit('3-slap', (1280, 800), 'screenshot-3-slap')
 fit('5-settings', (1280, 800), 'screenshot-5-settings')
 fit('tile', (440, 280), 'promo-small-440x280')
 
-# Robot with the popup open at the top right, as if from the toolbar.
 page = Image.open(f'{raw}/4-robot.png').convert('RGBA').resize((1280, 800), Image.LANCZOS)
 popup = Image.open(f'{raw}/popup.png').convert('RGBA')
 popup = popup.resize((340, round(popup.height * 340 / popup.width)), Image.LANCZOS)

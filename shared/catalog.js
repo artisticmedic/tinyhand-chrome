@@ -1,8 +1,3 @@
-// The hands, sounds and defaults. Hand art, fingertip and wrist points, stick
-// and ink colours come from TinyHand's site pointer (docs/pointer.js in
-// github.com/nilbuild/tinyhand, MIT, © 2026 Kamran Ahmed). Points are in the
-// pixels of each 380px-tall image in hands/.
-
 export const HANDS = [
   { id: 'lavender', name: 'Lavender toy', w: 257, h: 380, tip: [95.3, 12.0], wrist: [127.8, 368.6], stick: ['#3a3a3e', '#121214', '#000000'], ink: '#8754f2' },
   { id: 'glove', name: 'Cursor glove', w: 254, h: 380, tip: [93.9, 12.3], wrist: [128.3, 368.3], stick: ['#3a3a3e', '#121214', '#000000'], ink: '#8754f2' },
@@ -46,7 +41,6 @@ export const LASER = { id: 'laser', name: 'Laser dot', ink: '#ff2a1f' };
 
 export const STYLES = [...HANDS, LASER];
 
-// TinyHand's own toolbar defaults. The popup lists these first.
 export const PINNED = ['glove', 'lavender', 'coral', 'plush', 'robot', 'laser'];
 
 export const SOUNDS = [
@@ -67,15 +61,12 @@ export const SOUNDS = [
   { id: 'chirp', name: 'Chirp' },
 ];
 
-// Hand length, fingertip to wrist, as a fraction of the screen height, like
-// TinyHand's size slider (0.08 to 0.20, default 0.13).
 export const SIZES = [
   { id: 'small', name: 'Small', frac: 0.10 },
   { id: 'medium', name: 'Medium', frac: 0.13 },
   { id: 'large', name: 'Large', frac: 0.17 },
 ];
 
-// TinyHand's ink choices. "match" draws in each pointer's own colour.
 export const INKS = [
   { id: 'match', name: 'Match the pointer' },
   { id: 'red', name: 'Red', color: '#ff291f' },
@@ -88,7 +79,6 @@ export const INKS = [
   { id: 'black', name: 'Black', color: '#1d1d21' },
 ];
 
-// Seconds before a finished line fades; 0 keeps it until Esc.
 export const FADES = [
   { value: 3, name: 'After 3 seconds' },
   { value: 6, name: 'After 6 seconds' },
@@ -96,7 +86,6 @@ export const FADES = [
   { value: 0, name: 'Keep until Esc' },
 ];
 
-// Tim's TinyHand settings: glove, click, shadow on, hand taps on, laser quiet.
 export const DEFAULTS = {
   enabled: true,
   style: 'glove',
@@ -112,4 +101,3 @@ export const DEFAULTS = {
   disabledSites: [],
 };
 
-export const SETTING_KEYS = Object.keys(DEFAULTS);

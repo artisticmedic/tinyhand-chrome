@@ -1,17 +1,12 @@
-// The pointer, sound and appearance controls, shared by the popup and the
-// Settings page. Each control writes straight to chrome.storage.local; the
-// service worker redraws the cursor from there.
+import { DEFAULTS, FADES, INKS, PINNED, SIZES, SOUNDS, STYLES } from './catalog.js';
 
-import { DEFAULTS, FADES, HANDS, INKS, PINNED, SETTING_KEYS, SIZES, SOUNDS, STYLES } from './catalog.js';
-
-// Key names as this computer labels them.
 const IS_MAC = /Mac/.test(navigator.platform);
 export const KEYS = IS_MAC
   ? { alt: '⌥', arrow: '⌘', altZ: '⌥Z' }
   : { alt: 'Alt', arrow: 'Ctrl', altZ: 'Alt+Z' };
 
-export async function readSettings() {
-  return { ...DEFAULTS, ...(await chrome.storage.local.get(SETTING_KEYS)) };
+export function readSettings() {
+  return chrome.storage.local.get(DEFAULTS);
 }
 
 export function save(values) {
@@ -38,7 +33,6 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
-// onChange replaces the default of saving the switch under `key`.
 export function switchRow(label, key, settings, detail, onChange) {
   const input = el('input', {
     type: 'checkbox', role: 'switch', checked: !!settings[key],
@@ -49,7 +43,6 @@ export function switchRow(label, key, settings, detail, onChange) {
   return { row: el('label', { class: 'row' }, [text, input]), input };
 }
 
-// Pinned styles first, in TinyHand's toolbar order, then the rest.
 function orderedStyles() {
   const pinned = PINNED.map((id) => STYLES.find((s) => s.id === id));
   return [...pinned, ...STYLES.filter((s) => !PINNED.includes(s.id))];
@@ -82,7 +75,11 @@ export function soundPicker(settings) {
     el('option', { value: 'off', textContent: 'Off' }),
     ...SOUNDS.map((s) => el('option', { value: s.id, textContent: s.name })),
   ]);
-  const sync = (s) => { select.value = s.handSound ? s.sound : 'off'; };
+  let current = settings;
+  const sync = (s) => {
+    current = s;
+    select.value = s.handSound ? s.sound : 'off';
+  };
   sync(settings);
   select.addEventListener('change', () => {
     if (select.value === 'off') {
@@ -94,7 +91,7 @@ export function soundPicker(settings) {
   });
   const play = el('button', {
     type: 'button', class: 'icon-button', title: 'Play', 'aria-label': 'Play the tap sound',
-    onclick: () => previewSound(select.value === 'off' ? settings.sound : select.value),
+    onclick: () => previewSound(current.sound),
   });
   play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
   const row = el('div', { class: 'row' }, [
@@ -135,8 +132,7 @@ export function inkPicker(settings) {
   });
   group.append(...buttons);
   const sync = (s) => {
-    const own = STYLES.find((style) => style.id === s.style)?.ink;
-    group.style.setProperty('--match', own || '#8754f2');
+    group.style.setProperty('--match', STYLES.find((style) => style.id === s.style).ink);
     for (const b of buttons) b.setAttribute('aria-checked', String(b.dataset.ink === s.ink));
   };
   sync(settings);
@@ -160,7 +156,7 @@ export function fadePicker(settings) {
 }
 
 export function handName(id) {
-  return STYLES.find((s) => s.id === id)?.name ?? id;
+  return STYLES.find((s) => s.id === id).name;
 }
 
-export { el, HANDS };
+export { el };

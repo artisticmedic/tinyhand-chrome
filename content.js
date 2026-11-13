@@ -1,19 +1,4 @@
-// TinyHand for Chrome - content script
-//
-// Hides the real cursor in every frame and, in the top frame, draws TinyHand's
-// hand on a stick that reaches up from below the bottom of the window to the
-// pointer. Frames pass the pointer up to their parent, so the hand follows it
-// into iframes too. The drawing follows TinyHand's ArmView.swift and its site
-// pointer (docs/pointer.js), github.com/nilbuild/tinyhand, MIT, © 2026 Kamran
-// Ahmed. Hiding the cursor with a user-origin stylesheet, in shadow roots
-// too, follows Purrsor (github.com/lihbr/purrsor, MIT, © Lucie Haberer).
-
-// Wrapped in a function so a copy injected after an update doesn't collide
-// with the names of the copy it replaces.
 (() => {
-// After an install or update the service worker injects this script into open
-// tabs, which may already run a copy. A live copy answers the announcement and
-// this one quits before it touches anything.
 const INSTANCE_EVENT = 'tinyhand:instance';
 const ALIVE_EVENT = 'tinyhand:alive';
 let answered = false;
@@ -24,33 +9,23 @@ document.removeEventListener(ALIVE_EVENT, onAlive);
 if (answered) return;
 
 const IS_TOP = window === window.top;
-// The Settings page loads this script too, so you can try the hand there.
-// Extension pages can't take inserted CSS and have no chrome.dom.
 const IS_EXTENSION_PAGE = location.protocol === 'chrome-extension:';
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-// The arrowhead key is Command on a Mac and Ctrl elsewhere, where the Windows
-// key opens the Start menu.
 const IS_MAC = /Mac/.test(navigator.platform);
 const wantsArrow = (event) => (IS_MAC ? event.metaKey : event.ctrlKey);
 
-// Web pages reach the extension's files through the per-session URL that
-// use_dynamic_url gives them. Extension pages use plain paths, since their own
-// content security policy doesn't count that URL as 'self'.
+// Extension pages' CSP doesn't treat use_dynamic_url's addresses as 'self'.
 function extensionUrl(file) {
   return IS_EXTENSION_PAGE ? `/${file}` : chrome.runtime.getURL(file);
 }
 
-// TinyHand's numbers (ArmView.swift), as fractions of the screen height.
-const GRIP_DEPTH = 0.12; // the stick is held this far below the bottom edge
-const GRIP_LEAN = 0.30; // ...and this far to the right of the pointer, as a fraction of the width
-const GRIP_FOLLOW_PER_MS = 0.0048; // 0.08 per frame at 60 fps
-const LIFT = 0.06; // shadow distance
-const PRESS_SCALE = 0.06; // the hand shrinks 6% on a tap
-const PRESS_DECAY_PER_MS = 0.011; // 0.18 per frame at 60 fps
+const GRIP_DEPTH = 0.12;
+const GRIP_LEAN = 0.30;
+const GRIP_FOLLOW_PER_MS = 0.0048;
+const LIFT = 0.06;
+const PRESS_SCALE = 0.06;
+const PRESS_DECAY_PER_MS = 0.011;
 
-// The slap: the stick winds back to the right, swings through the target and
-// past it, then settles. Times in ms from the click, angles in radians about
-// the grip. The swing crosses the target at SLAP_IMPACT_MS.
 const SLAP_WIND_MS = 110;
 const SLAP_HIT_MS = 170;
 const SLAP_END_MS = 430;
@@ -59,23 +34,18 @@ const SLAP_WIND = 0.38;
 const SLAP_FOLLOW = 0.1;
 const IMPACT_MS = 300;
 
-// Drawing, from TinyHand's Ink.swift and OverlayController.drag().
-const INK_START_PX = 4; // a stroke starts once the press has moved this far
-const INK_STEP_PX = 1.5; // points closer than this to the last one are skipped
-const INK_WIDTH = 0.0055; // of the screen height, at least 3 px
+const INK_START_PX = 4;
+const INK_STEP_PX = 1.5;
+const INK_WIDTH = 0.0055;
 const INK_FADE_MS = 600;
 
-let settings = null; // see apply(); null while the hand is off here
+let settings = null;
 let catalog = null;
 let insertedCss = null;
 
-// ---------------------------------------------------------------- sound
-
 let audioContext;
-const buffers = new Map(); // sound id -> Promise<AudioBuffer>
+const buffers = new Map();
 
-// Created inside a pointerdown handler, which carries user activation, so
-// autoplay policy lets the AudioContext start.
 function playTap(id) {
   audioContext ??= new AudioContext();
   if (audioContext.state === 'suspended') audioContext.resume();
@@ -91,13 +61,10 @@ function playTap(id) {
       source.connect(audioContext.destination);
       source.start();
     },
-    // Fails when the extension was reloaded under this page; retry next click.
     () => buffers.delete(id)
   );
 }
 
-// A slap, made rather than recorded: a burst of band-passed noise over a short
-// falling thump, scheduled `delay` seconds ahead to land on the impact.
 function playSlap(delay) {
   audioContext ??= new AudioContext();
   const ctx = audioContext;
@@ -130,12 +97,6 @@ function playSlap(delay) {
   thump.stop(when + 0.13);
 }
 
-// ---------------------------------------------------------------- hiding the cursor
-
-// The service worker inserts the CSS with chrome.scripting.insertCSS as a
-// user-origin stylesheet. User !important beats every author rule, including a
-// site's own !important, and the sheet lives outside the DOM, so a page that
-// rewrites <head> cannot remove it. `css` is null to remove the styles.
 function setStyles(css) {
   if (css === insertedCss) return;
   const previous = insertedCss;
@@ -155,16 +116,17 @@ function openOrClosedShadowRoot(el) {
   return el.shadowRoot || chrome.dom?.openOrClosedShadowRoot(el) || null;
 }
 
+function scannedShadowRoot(el) {
+  if (el.localName.includes('-') && el instanceof HTMLElement && el !== overlay.host) return openOrClosedShadowRoot(el);
+  return el.shadowRoot;
+}
+
 const HIDE_CSS = ':root, :root * { cursor: none !important; }';
 
-// Chromium doesn't apply user stylesheets inside shadow roots, so every shadow
-// root also adopts shadowSheet. chrome.dom reaches closed roots as well.
 const shadowSheet = new CSSStyleSheet();
-let shadowRoots = new Set(); // also searched for iframes; pruned when hosts leave
+let shadowRoots = new Set();
 let watchingShadowRoots = false;
 
-// One callback can report a node and its descendants separately; `seen` keeps
-// each element to a single visit.
 const shadowObserver = new MutationObserver((records) => {
   const seen = new Set();
   for (const record of records) {
@@ -173,17 +135,6 @@ const shadowObserver = new MutationObserver((records) => {
     }
   }
 });
-
-// el.shadowRoot sees open roots only. chrome.dom sees closed ones too but costs
-// about 50 times more per call, so scans ask it only about custom elements,
-// which host nearly every closed root. The pointerover check covers the rest.
-function scannedShadowRoot(el) {
-  if (el.shadowRoot) return el.shadowRoot;
-  if (el.localName.includes('-') && el instanceof HTMLElement && el !== overlay.host) {
-    return openOrClosedShadowRoot(el);
-  }
-  return null;
-}
 
 function findShadowRoots(node, seen = new Set()) {
   if (seen.has(node)) return;
@@ -199,7 +150,6 @@ function findShadowRoots(node, seen = new Set()) {
 
 function adoptShadowRoot(root) {
   if (!root) return;
-  // Checked every time: a component can replace its adoptedStyleSheets.
   if (!root.adoptedStyleSheets.includes(shadowSheet)) {
     root.adoptedStyleSheets = [...root.adoptedStyleSheets, shadowSheet];
   }
@@ -220,28 +170,24 @@ function watchShadowRoots() {
   watchingShadowRoots = true;
   shadowObserver.observe(document, { childList: true, subtree: true });
   findShadowRoots(document);
-  // A custom element defined after the parser created it attaches its shadow
-  // root without a DOM mutation, so look again once parsing is done.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => findShadowRoots(document), { once: true });
   }
 }
 
-// ---------------------------------------------------------------- the overlay (top frame)
-
 const overlay = {
   host: null,
-  canvas: null, // the hand and stick, under the shadow filter
+  canvas: null,
   ctx: null,
-  inkCanvas: null, // the drawing, under the hand and without its shadow
+  inkCanvas: null,
   inkCtx: null,
-  strokes: [], // { points, color, width, arrow, ended }
+  strokes: [],
   width: 0,
   height: 0,
   dpr: 1,
-  images: new Map(), // style id -> Promise<ImageBitmap>
-  image: null, // the current style's ImageBitmap, once loaded
-  cursor: null, // { x, y } in this window's CSS px, or null when hidden
+  images: new Map(),
+  image: null,
+  cursor: null,
   gripX: null,
   held: false,
   press: 0,
@@ -249,14 +195,11 @@ const overlay = {
   frame: 0,
   hideTimer: 0,
   filter: '',
-  slap: null, // { start } while the slap animation runs
-  impact: null, // { x, y, start } for the burst where the slap lands
+  slap: null,
+  impact: null,
 };
 
 function createOverlay() {
-  // A custom element with a closed shadow root keeps page styles off the
-  // canvas. As a manual popover it sits in the top layer, above dialogs and
-  // fullscreen elements, and pointer-events: none lets every click through.
   const host = document.createElement('tinyhand-overlay');
   host.setAttribute('popover', 'manual');
   host.setAttribute('aria-hidden', 'true');
@@ -280,37 +223,29 @@ function createOverlay() {
 }
 
 function mountOverlay() {
-  // SVG and other XML documents can't host the custom element.
   if (!(document.documentElement instanceof HTMLElement)) return;
   if (!overlay.host) createOverlay();
   const host = overlay.host;
   if (!host.isConnected) {
-    (document.documentElement || document).append(host);
+    document.documentElement.append(host);
     raiseOverlay();
     resizeOverlay();
   }
 }
 
-// Shows the popover again so it moves to the top of the top layer, above a
-// dialog, popover or fullscreen element that opened after it.
 function raiseOverlay() {
   const host = overlay.host;
   if (!host?.isConnected) return;
-  try {
-    if (host.matches(':popover-open')) host.hidePopover();
-    host.showPopover();
-  } catch {
-    // Some documents (XML, sandboxed) have no popover support; fixed
-    // positioning with the top z-index still covers most pages.
-  }
+  if (host.matches(':popover-open')) host.hidePopover();
+  host.showPopover();
 }
 
 function resizeOverlay() {
   const { host, canvas } = overlay;
   if (!host?.isConnected) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  const width = host.clientWidth || window.innerWidth;
-  const height = host.clientHeight || window.innerHeight;
+  const dpr = Math.min(devicePixelRatio, 3);
+  const width = host.clientWidth;
+  const height = host.clientHeight;
   if (width === overlay.width && height === overlay.height && dpr === overlay.dpr) return;
   overlay.width = width;
   overlay.height = height;
@@ -356,7 +291,11 @@ function schedule() {
 }
 
 function screenHeight() {
-  return window.screen?.height || overlay.height;
+  return screen.height;
+}
+
+function sizeFraction() {
+  return catalog.SIZES.find((s) => s.id === settings.size).frac;
 }
 
 function draw(now) {
@@ -395,21 +334,16 @@ function draw(now) {
   else overlay.lastFrame = 0;
 }
 
-// TinyHand's ArmView.aim(cursor:): the stick is held below the bottom edge,
-// to the right of the pointer, and the hand turns so its fingertip lands on
-// the pointer. The grip trails the pointer, so the stick swings as you move.
 function drawHand(dt, slap) {
-  const hand = catalog?.HANDS.find((h) => h.id === settings.style);
   const image = overlay.image;
-  if (!hand || !image) return false;
+  if (!image) return false;
+  const hand = catalog.HANDS.find((h) => h.id === settings.style);
   const { ctx, width: W, height: H, cursor } = overlay;
   const screenH = screenHeight();
-
-  const sizeFrac = (catalog.SIZES.find((s) => s.id === settings.size) || catalog.SIZES[1]).frac;
   const [tx, ty] = hand.tip;
   const [wx, wy] = hand.wrist;
   const press = Math.max(overlay.press, slap.press);
-  const handLength = sizeFrac * screenH * (1 - PRESS_SCALE * press) * slap.scale;
+  const handLength = sizeFraction() * screenH * (1 - PRESS_SCALE * press) * slap.scale;
   const s = handLength / Math.hypot(wx - tx, wy - ty);
 
   const targetX = Math.min(Math.max(cursor.x + GRIP_LEAN * W, W * 0.15), W * 1.05);
@@ -427,11 +361,10 @@ function drawHand(dt, slap) {
   const sin = Math.sin(rotation);
   const wrist = { x: cursor.x + dx * cos - dy * sin, y: cursor.y + dx * sin + dy * cos };
 
-  // The stick, shaded across its width so it reads as round.
   const stickWidth = Math.max(4, hand.h * s * 0.07);
   const nx = -(wrist.y - grip.y);
   const ny = wrist.x - grip.x;
-  const nl = Math.hypot(nx, ny) || 1;
+  const nl = Math.hypot(nx, ny);
   const mx = (wrist.x + grip.x) / 2;
   const my = (wrist.y + grip.y) / 2;
   const ox = (nx / nl) * (stickWidth / 2);
@@ -442,7 +375,6 @@ function drawHand(dt, slap) {
   shade.addColorStop(0.55, hand.stick[0]);
   shade.addColorStop(1, hand.stick[2]);
   ctx.save();
-  // The slap turns the whole stick about the grip.
   ctx.translate(grip.x, grip.y);
   ctx.rotate(slap.swing);
   ctx.translate(-grip.x, -grip.y);
@@ -463,11 +395,9 @@ function drawHand(dt, slap) {
   return Math.abs(targetX - overlay.gripX) > 0.3;
 }
 
-// TinyHand's laser: a red dot with a glow and a pale core.
 function drawLaser() {
   const { ctx, cursor } = overlay;
-  const sizeFrac = (catalog?.SIZES.find((s) => s.id === settings.size) || { frac: 0.13 }).frac;
-  const r = Math.max(4, screenHeight() * 0.0038 * (sizeFrac / 0.13)) * (1 + 0.2 * overlay.press);
+  const r = Math.max(4, screenHeight() * 0.0038 * (sizeFraction() / 0.13)) * (1 + 0.2 * overlay.press);
   ctx.save();
   ctx.shadowColor = '#ff2a1f';
   ctx.shadowBlur = r * (2.2 + overlay.press);
@@ -483,7 +413,6 @@ function drawLaser() {
   ctx.restore();
 }
 
-// Draws every stroke; returns true while one is still being drawn or fading.
 function drawInk(now) {
   const { inkCtx: ctx, strokes } = overlay;
   let busy = false;
@@ -531,8 +460,6 @@ function drawStroke(ctx, stroke, alpha) {
   ctx.restore();
 }
 
-// Aims the head along the last stretch of the stroke, so a wobble at the very
-// end doesn't twist it.
 function addArrowHead(ctx, points, size) {
   const end = points[points.length - 1];
   let back = points[0];
@@ -554,9 +481,8 @@ function addArrowHead(ctx, points, size) {
 }
 
 function inkColor() {
-  const choice = catalog?.INKS.find((c) => c.id === settings.ink);
-  if (choice?.color) return choice.color;
-  return catalog?.STYLES.find((s) => s.id === settings.style)?.ink || '#8754f2';
+  return catalog.INKS.find((c) => c.id === settings.ink).color
+    ?? catalog.STYLES.find((s) => s.id === settings.style).ink;
 }
 
 const MAX_STROKES = 200;
@@ -570,7 +496,7 @@ function startInk(x, y) {
     width: Math.max(3, screenHeight() * INK_WIDTH),
     arrow: false,
     ended: 0,
-    fadeAfter: Math.max(0, settings.fade) * 1000,
+    fadeAfter: settings.fade * 1000,
   });
   schedule();
 }
@@ -606,8 +532,6 @@ function clearInk() {
 const easeOut = (k) => 1 - (1 - k) ** 3;
 const easeIn = (k) => k * k * k;
 
-// Where the slap is at `now`: the swing about the grip, the hand's scale (it
-// lifts toward you on the wind-up) and how pressed it is.
 function slapPose(now) {
   const rest = { swing: 0, scale: 1, press: 0, active: false };
   if (!overlay.slap) return rest;
@@ -632,7 +556,6 @@ function slapPose(now) {
   return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: back, active: true };
 }
 
-// A ring and a few speed lines where the slap lands.
 function drawImpact(now) {
   const impact = overlay.impact;
   if (!impact) return false;
@@ -665,8 +588,6 @@ function drawImpact(now) {
   return true;
 }
 
-// TinyHand's shadow falls down and to the right and tucks in on a tap. A CSS
-// drop-shadow on the whole overlay keeps the stick and hand one shape.
 function updateShadow(slap) {
   let filter = 'none';
   if (settings.shadow && settings.style !== 'laser') {
@@ -682,8 +603,6 @@ function updateShadow(slap) {
     overlay.canvas.style.filter = filter;
   }
 }
-
-// ---------------------------------------------------------------- pointer input
 
 function pointAt(x, y) {
   if (!settings) return;
@@ -714,8 +633,6 @@ function releaseHand() {
   schedule();
 }
 
-// Leaving this document can mean entering an iframe, whose first move arrives
-// a moment later, so wait before hiding the hand.
 function leaveSoon() {
   clearTimeout(overlay.hideTimer);
   overlay.hideTimer = setTimeout(() => {
@@ -725,7 +642,6 @@ function leaveSoon() {
   }, 120);
 }
 
-// Pointer events go up to the top frame, which draws. See "frames" below.
 function route(type, x, y, buttons = 0, arrow = false) {
   if (!IS_TOP) {
     sendToParent({ type, x, y, buttons, arrow });
@@ -748,17 +664,9 @@ function route(type, x, y, buttons = 0, arrow = false) {
   }
 }
 
-// ---------------------------------------------------------------- frames
-//
-// A frame posts its parent a random id, and only that. The parent tells the
-// service worker it owns the id, and from then on the frame's pointer events
-// travel frame -> service worker -> parent as extension messages, which the
-// page can neither read nor forge. The parent adds the iframe's position and
-// passes them on, up to the top frame.
-
 const HELLO_KEY = '__tinyhandFrame';
 const ownFrameId = IS_TOP ? null : [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
-const childFrames = new Map(); // child frame id -> iframe element
+const childFrames = new Map();
 
 function sayHello() {
   if (!IS_TOP) window.parent.postMessage({ [HELLO_KEY]: ownFrameId }, '*');
@@ -767,7 +675,7 @@ function sayHello() {
 function sendToParent(packet) {
   chrome.runtime.sendMessage({ action: 'toParent', id: ownFrameId, packet }).then(
     (reply) => { if (reply?.unknown) sayHello(); },
-    () => {} // the extension was reloaded under this page
+    () => {}
   );
 }
 
@@ -785,8 +693,6 @@ function frameElementFor(source) {
   return null;
 }
 
-// A point in the iframe's viewport, in this window's viewport. Scaling covers
-// iframes shrunk or grown with a CSS transform.
 function framePoint(frame, x, y) {
   const rect = frame.getBoundingClientRect();
   const style = getComputedStyle(frame);
@@ -799,10 +705,9 @@ function framePoint(frame, x, y) {
 
 window.addEventListener('message', (event) => {
   const id = event.data?.[HELLO_KEY];
-  if (typeof id !== 'string' || id.length > 64 || !event.source) return;
+  if (typeof id !== 'string' || !event.source) return;
   const frame = frameElementFor(event.source);
   if (!frame) return;
-  // The first iframe to claim an id keeps it.
   const known = childFrames.get(id);
   if (known && known !== frame && known.isConnected) return;
   childFrames.set(id, frame);
@@ -816,26 +721,23 @@ chrome.runtime.onMessage.addListener((message) => {
     childFrames.delete(message.id);
     return;
   }
-  const { type, x, y, buttons, arrow } = message.packet || {};
-  if (typeof type !== 'string' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const { type, x, y, buttons, arrow } = message.packet;
   const [px, py] = framePoint(frame, x, y);
-  route(type, px, py, buttons | 0, arrow === true);
+  route(type, px, py, buttons, arrow);
 });
 
-function counts(event) {
+function isTracked(event) {
   return settings && event.pointerType !== 'touch';
 }
 
-// A Shift-press in this frame that may become a stroke: { x, y, drawing }.
 let gesture = null;
 
 window.addEventListener('pointermove', (event) => {
-  if (!counts(event)) return;
+  if (!isTracked(event)) return;
   const { clientX: x, clientY: y } = event;
   lastPointer = { x, y };
   if (settings.slap && event.altKey && !gesture) highlight(slapTarget(x, y));
   else unhighlight();
-  // The button came up outside the window, where this frame never heard it.
   if (gesture && !(event.buttons & 1)) endGesture(x, y, wantsArrow(event));
   if (gesture) {
     if (!gesture.drawing && Math.hypot(x - gesture.x, y - gesture.y) >= INK_START_PX) {
@@ -852,7 +754,7 @@ window.addEventListener('pointermove', (event) => {
 }, true);
 
 window.addEventListener('pointerdown', (event) => {
-  if (!counts(event)) return;
+  if (!isTracked(event)) return;
   const { clientX: x, clientY: y } = event;
   if (event.button === 0 && event.altKey && settings.slap) {
     swallow(event);
@@ -860,8 +762,6 @@ window.addEventListener('pointerdown', (event) => {
     slapAt(x, y);
     return;
   }
-  // Shift-press: the page doesn't see the mousedown, so it starts no text
-  // selection or drag. If the press never moves, its click still goes through.
   if (event.button === 0 && event.shiftKey && settings.draw && !isEditable(event.composedPath()[0])) {
     swallow(event);
     mute(['mousedown']);
@@ -885,7 +785,7 @@ window.addEventListener('pointerup', (event) => {
   if (muted) unmuteSoon();
   if (gesture) endGesture(event.clientX, event.clientY, wantsArrow(event));
   if (muted?.has('mouseup')) swallow(event);
-  if (!counts(event)) return;
+  if (!isTracked(event)) return;
   route('up', event.clientX, event.clientY, event.buttons);
 }, true);
 
@@ -908,7 +808,6 @@ document.addEventListener('pointerout', (event) => {
   route('leave', event.clientX, event.clientY, 0);
 }, true);
 
-// Catches a shadow root attached late, when the pointer first enters it.
 window.addEventListener('pointerover', (event) => {
   if (!watchingShadowRoots) return;
   for (const node of event.composedPath()) {
@@ -918,8 +817,6 @@ window.addEventListener('pointerover', (event) => {
 
 if (IS_TOP) {
   window.addEventListener('resize', resizeOverlay);
-  // A dialog, popover or fullscreen element opened after the overlay would sit
-  // above it in the top layer.
   document.addEventListener('toggle', (event) => {
     if (event.target !== overlay.host && event.newState === 'open') raiseOverlay();
   }, true);
@@ -929,18 +826,10 @@ if (IS_TOP) {
   });
 }
 
-// ---------------------------------------------------------------- slap to remove
-//
-// Hold Option (Alt elsewhere) to outline the element under the hand;
-// Option-click slaps it off the page, like VisBug's delete. Option-Z puts the
-// last one back. The
-// element is hidden with display: none, not removed, so the page's own scripts
-// still find it, and a reload brings everything back.
-
 let lastPointer = null;
-let highlighted = null; // { el, outline, offset } with the inline values to restore
-const slapped = []; // { el, display, timer, animation } for Option-Z, newest last
-let muted = null; // Set of mouse event types the page shouldn't see for this press
+let highlighted = null;
+const slapped = [];
+let muted = null;
 let mutedTimer = 0;
 
 function swallow(event) {
@@ -953,22 +842,15 @@ function mute(types) {
   muted = new Set([...(muted || []), ...types]);
 }
 
-// The click, if any, follows the pointerup right away; this only cleans up a
-// press whose click never comes.
 function unmuteSoon() {
   clearTimeout(mutedTimer);
   mutedTimer = setTimeout(() => { muted = null; }, 400);
 }
 
-// A slap hides all of its click from the page, so an Option-click on a link
-// doesn't download it and a button doesn't fire. A stroke hides its mouseup
-// and click, so drawing over a button doesn't press it.
 for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
   window.addEventListener(type, (event) => {
     if (!muted?.has(type)) return;
     swallow(event);
-    // The dblclick of a double slap follows its second click; let it be
-    // swallowed too before the press ends.
     if (type === 'click') setTimeout(() => { muted = null; }, 0);
   }, true);
 }
@@ -976,18 +858,13 @@ for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
 function deepElementFromPoint(x, y) {
   let el = document.elementFromPoint(x, y);
   for (let depth = 0; el && depth < 32; depth++) {
-    const root = el.shadowRoot || (el.localName.includes('-') && el instanceof HTMLElement ? openOrClosedShadowRoot(el) : null);
-    const inner = root?.elementFromPoint(x, y);
+    const inner = scannedShadowRoot(el)?.elementFromPoint(x, y);
     if (!inner || inner === el) break;
     el = inner;
   }
   return el;
 }
 
-// What a slap takes: the nearest box under the pointer that reads as a unit
-// on screen (a card, a list item, an image, a button), rather than the line
-// of text the pointer happens to be on. Boxes that fill most of the window
-// are passed over; with nothing else, the innermost block goes.
 const SECTION_TAGS = new Set(['SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'FIGURE', 'LI', 'TR', 'TABLE', 'FORM', 'BUTTON', 'IMG', 'VIDEO', 'CANVAS', 'svg', 'IFRAME', 'PICTURE', 'DIALOG']);
 
 function looksLikeBox(el, style) {
@@ -1056,8 +933,6 @@ function slapAt(x, y) {
   entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
 }
 
-// Knocked away to the left, the way the swing goes, then hidden.
-// With Reduce Motion on, it just fades.
 function knockOff(entry) {
   entry.timer = 0;
   const { el } = entry;
@@ -1071,7 +946,6 @@ function knockOff(entry) {
       { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
     ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
   entry.animation = animation;
-  // Option-Z can take it back mid-flight; then there's nothing to hide.
   const hide = () => {
     if (!slapped.includes(entry)) return;
     el.style.setProperty('display', 'none', 'important');
@@ -1106,68 +980,56 @@ window.addEventListener('keyup', (event) => {
 
 window.addEventListener('blur', unhighlight);
 
-// ---------------------------------------------------------------- settings
-
-// The hand is off on a site when the top frame's host is on the list. Frames
-// read the top host from ancestorOrigins, since they can't read top.location.
 function topHostname() {
-  if (IS_TOP) return location.hostname;
   const origins = location.ancestorOrigins;
-  if (origins?.length) {
-    try {
-      return new URL(origins[origins.length - 1]).hostname;
-    } catch {}
-  }
-  return location.hostname;
+  if (IS_TOP || !origins.length) return location.hostname;
+  return URL.parse(origins[origins.length - 1])?.hostname ?? location.hostname;
+}
+
+function standDown() {
+  settings = null;
+  unhighlight();
+  gesture = null;
+  clearTimeout(mutedTimer);
+  muted = null;
+  shadowSheet.replaceSync('');
+  stopWatchingShadowRoots();
+  if (IS_TOP) unmountOverlay();
 }
 
 async function apply() {
-  const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound', 'slap', 'draw', 'ink', 'fade']);
-  const style = stored.style || 'glove';
-  // A top-level SVG or XML document can't host the overlay, so it keeps the
-  // real cursor.
-  const xmlTop = IS_TOP && document.documentElement && !(document.documentElement instanceof HTMLElement);
-  const off = stored.enabled === false || xmlTop || (stored.disabledSites || []).includes(topHostname());
-  if (off) {
-    settings = null;
-    unhighlight();
-    gesture = null;
-    clearTimeout(mutedTimer);
-    muted = null;
+  catalog ??= await import(extensionUrl('shared/catalog.js'));
+  const stored = await chrome.storage.local.get(catalog.DEFAULTS);
+  const xmlTop = IS_TOP && !(document.documentElement instanceof HTMLElement);
+  if (!stored.enabled || xmlTop || stored.disabledSites.includes(topHostname())) {
+    standDown();
     setStyles(null);
-    shadowSheet.replaceSync('');
-    stopWatchingShadowRoots();
-    if (IS_TOP) unmountOverlay();
     return;
   }
 
-  const handSound = stored.handSound !== false;
-  const laserSound = stored.laserSound === true;
-  const sound = !handSound || (style === 'laser' && !laserSound) ? null : (stored.sound || 'click');
+  const muteLaser = stored.style === 'laser' && !stored.laserSound;
   const previousStyle = settings?.style;
   settings = {
-    style,
-    size: stored.size || 'medium',
-    shadow: stored.shadow !== false,
-    sound,
-    slap: stored.slap !== false,
-    draw: stored.draw !== false,
-    ink: stored.ink || 'match',
-    fade: Number.isFinite(stored.fade) ? stored.fade : 3,
+    style: stored.style,
+    size: stored.size,
+    shadow: stored.shadow,
+    sound: stored.handSound && !muteLaser ? stored.sound : null,
+    slap: stored.slap,
+    draw: stored.draw,
+    ink: stored.ink,
+    fade: stored.fade,
   };
   if (!settings.slap) unhighlight();
 
   setStyles(HIDE_CSS);
-  // :is() takes its most specific argument, so this matches everything with
-  // the weight of three ids and beats a component's own !important rules.
+  // :is() carries its weightiest argument, so this beats a component's own !important.
   shadowSheet.replaceSync(':is(*, #tinyhand#tinyhand#tinyhand) { cursor: none !important; }');
   watchShadowRoots();
   sayHello();
 
   if (IS_TOP) {
-    catalog ??= await import(extensionUrl('shared/catalog.js'));
-    if (style !== previousStyle || !overlay.image) useStyle(style);
-    if (overlay.host?.isConnected) schedule();
+    if (settings.style !== previousStyle || !overlay.image) useStyle(settings.style);
+    schedule();
   }
 }
 
@@ -1175,18 +1037,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') apply();
 });
 
-// When a new copy announces itself, a live copy answers so the newcomer quits,
-// and a copy cut off from the extension by an update hands the page over.
 document.addEventListener(INSTANCE_EVENT, () => {
-  if (chrome.runtime?.id) {
-    document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
-    return;
-  }
-  settings = null;
-  unhighlight();
-  shadowSheet.replaceSync('');
-  stopWatchingShadowRoots();
-  if (IS_TOP) unmountOverlay();
+  if (chrome.runtime?.id) document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
+  else standDown();
 });
 
 apply();

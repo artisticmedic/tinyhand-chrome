@@ -1,6 +1,4 @@
 #!/bin/sh
-# Builds the Chrome Web Store upload: dist/tinyhand-<version>.zip, holding only
-# what the extension loads. No build step; this just picks the files.
 set -eu
 cd "$(dirname "$0")/.."
 version=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')

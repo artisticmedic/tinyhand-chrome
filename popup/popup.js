@@ -17,19 +17,14 @@ const draw = switchRow('Shift-drag draws', 'draw', settings, `Hold ${KEYS.arrow}
 const slap = switchRow(`${KEYS.alt}-click slaps things off`, 'slap', settings, `${KEYS.altZ} puts the last one back`);
 document.getElementById('options').append(sound.row, size.row, shadow.row, draw.row, slap.row);
 
-// "Off on this site" needs the active tab's host, which activeTab grants
-// while the popup is open. Pages like chrome:// have none.
 const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-let host = '';
-try {
-  const url = new URL(tab?.url || '');
-  if (url.protocol === 'http:' || url.protocol === 'https:') host = url.hostname;
-} catch {}
+const url = URL.parse(tab.url ?? '');
+const host = url && /^https?:$/.test(url.protocol) ? url.hostname : '';
 const siteCard = document.getElementById('site');
 if (host) {
   const siteSettings = { siteOff: settings.disabledSites.includes(host) };
   const site = switchRow(`Off on ${host}`, 'siteOff', siteSettings, null, async (off) => {
-    const { disabledSites = [] } = await chrome.storage.local.get('disabledSites');
+    const { disabledSites } = await chrome.storage.local.get({ disabledSites: [] });
     const next = off ? [...new Set([...disabledSites, host])] : disabledSites.filter((h) => h !== host);
     save({ disabledSites: next });
   });
