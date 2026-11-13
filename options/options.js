@@ -2,6 +2,8 @@ import { el, fadePicker, inkPicker, readSettings, save, sizePicker, soundPicker,
 
 const settings = await readSettings();
 
+document.getElementById('reset-practice').addEventListener('click', () => location.reload());
+
 const enabled = switchRow('Show the hand', 'enabled', settings, 'Replaces the cursor on every site.');
 document.getElementById('general').append(enabled.row);
 

@@ -11,6 +11,8 @@ chrome.runtime.onInstalled.addListener(async ({ reason, previousVersion }) => {
   if (reason === 'update' && previousVersion === '0.1.0') delete stored.size;
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
   await chrome.storage.local.remove('cursors');
+  // The Settings page shows the hand and has a place to try drawing and slapping.
+  if (reason === 'install') chrome.runtime.openOptionsPage();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {

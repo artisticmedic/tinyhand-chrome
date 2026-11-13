@@ -37,3 +37,46 @@ body.off #appearance,
 body.off #sound,
 body.off #draw,
 body.off #slap { opacity: 0.45; }
+
+.practice { padding: 12px; }
+
+.stage {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 190px;
+  padding: 24px;
+  border-radius: 8px;
+  background: radial-gradient(var(--line) 1px, transparent 1px) 0 0 / 14px 14px;
+}
+
+.note {
+  width: 132px;
+  padding: 18px 14px;
+  border-radius: 4px;
+  background: #fff4b8;
+  color: #3d3520;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 6px 14px rgba(0, 0, 0, 0.08);
+  transform: rotate(var(--tilt, 0deg));
+}
+
+.note:nth-child(2) { background: #ffd9e6; color: #4a2433; }
+.note:nth-child(3) { background: #d7ecff; color: #1e3550; }
+
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  align-items: center;
+  padding: 10px 4px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.keys .link { margin-left: auto; font-size: 12px; }
+
+code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }

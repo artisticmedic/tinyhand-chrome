@@ -20,6 +20,15 @@ footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px 12px;
+  padding: 10px 14px 4px;
   font-size: 12px;
 }
+
+.credit {
+  margin: 0;
+  padding: 0 14px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.credit a { color: inherit; }

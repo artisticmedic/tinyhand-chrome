@@ -10,6 +10,10 @@
 
 const IS_TOP = window === window.top;
 const MESSAGE_KEY = '__tinyhand';
+// The Settings page loads this script too, so you can try the hand there.
+// Extension pages can't take inserted CSS and have no chrome.dom.
+const IS_EXTENSION_PAGE = location.protocol === 'chrome-extension:';
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
 // TinyHand's numbers (ArmView.swift), as fractions of the screen height.
 const GRIP_DEPTH = 0.12; // the stick is held this far below the bottom edge
@@ -111,7 +115,19 @@ function setStyles(css) {
   if (css === insertedCss) return;
   const previous = insertedCss;
   insertedCss = css;
+  if (IS_EXTENSION_PAGE) {
+    pageStyle ??= document.createElement('style');
+    pageStyle.textContent = css || '';
+    if (!pageStyle.isConnected) document.documentElement.append(pageStyle);
+    return;
+  }
   chrome.runtime.sendMessage({ action: 'setCursorCss', css, previous });
+}
+
+let pageStyle = null;
+
+function openOrClosedShadowRoot(el) {
+  return el.shadowRoot || chrome.dom?.openOrClosedShadowRoot(el) || null;
 }
 
 const HIDE_CSS = ':root, :root * { cursor: none !important; }';
@@ -136,7 +152,7 @@ const shadowObserver = new MutationObserver((records) => {
 function scannedShadowRoot(el) {
   if (el.shadowRoot) return el.shadowRoot;
   if (el.localName.includes('-') && el instanceof HTMLElement && el !== overlay.host) {
-    return chrome.dom.openOrClosedShadowRoot(el);
+    return openOrClosedShadowRoot(el);
   }
   return null;
 }
@@ -225,6 +241,8 @@ function createOverlay() {
 }
 
 function mountOverlay() {
+  // SVG and other XML documents can't host the custom element.
+  if (!(document.documentElement instanceof HTMLElement)) return;
   if (!overlay.host) createOverlay();
   const host = overlay.host;
   if (!host.isConnected) {
@@ -551,6 +569,10 @@ const easeIn = (k) => k * k * k;
 function slapPose(now) {
   const rest = { swing: 0, scale: 1, press: 0, active: false };
   if (!overlay.slap) return rest;
+  if (reducedMotion?.matches) {
+    overlay.slap = null;
+    return rest;
+  }
   const t = now - overlay.slap.start;
   if (t >= SLAP_END_MS) {
     overlay.slap = null;
@@ -785,7 +807,7 @@ document.addEventListener('pointerout', (event) => {
 window.addEventListener('pointerover', (event) => {
   if (!watchingShadowRoots) return;
   for (const node of event.composedPath()) {
-    if (node instanceof HTMLElement && node !== overlay.host) adoptShadowRoot(chrome.dom.openOrClosedShadowRoot(node));
+    if (node instanceof HTMLElement && node !== overlay.host) adoptShadowRoot(openOrClosedShadowRoot(node));
   }
 }, true);
 
@@ -846,7 +868,7 @@ for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
 function deepElementFromPoint(x, y) {
   let el = document.elementFromPoint(x, y);
   for (let depth = 0; el && depth < 32; depth++) {
-    const root = el.shadowRoot || (el.localName.includes('-') && el instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(el) : null);
+    const root = el.shadowRoot || (el.localName.includes('-') && el instanceof HTMLElement ? openOrClosedShadowRoot(el) : null);
     const inner = root?.elementFromPoint(x, y);
     if (!inner || inner === el) break;
     el = inner;
@@ -904,15 +926,18 @@ function slapAt(x, y) {
 }
 
 // Knocked away to the left, the way the swing goes, then hidden.
+// With Reduce Motion on, it just fades.
 function knockOff(el) {
   slapped.push({ el, display: saveProp(el, 'display') });
   const rect = el.getBoundingClientRect();
   const dx = -(rect.right + 120);
-  const animation = el.animate([
-    { transform: 'none', opacity: 1 },
-    { transform: `translate(${dx * 0.35}px, -30px) rotate(-10deg)`, opacity: 1, offset: 0.25 },
-    { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
-  ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
+  const animation = reducedMotion?.matches
+    ? el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' })
+    : el.animate([
+      { transform: 'none', opacity: 1 },
+      { transform: `translate(${dx * 0.35}px, -30px) rotate(-10deg)`, opacity: 1, offset: 0.25 },
+      { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
+    ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
   const hide = () => {
     el.style.setProperty('display', 'none', 'important');
     animation.cancel();
