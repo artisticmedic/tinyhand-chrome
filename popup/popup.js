@@ -1,4 +1,4 @@
-import { handName, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
+import { KEYS, handName, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
 
 const settings = await readSettings();
 
@@ -13,8 +13,8 @@ document.getElementById('styles').append(grid.grid);
 const sound = soundPicker(settings);
 const size = sizePicker(settings);
 const shadow = switchRow('Shadow', 'shadow', settings);
-const draw = switchRow('Shift-drag draws', 'draw', settings, 'Hold ⌘ for an arrow, Esc clears');
-const slap = switchRow('⌥-click slaps things off', 'slap', settings, '⌥Z puts the last one back');
+const draw = switchRow('Shift-drag draws', 'draw', settings, `Hold ${KEYS.arrow} for an arrow, Esc clears`);
+const slap = switchRow(`${KEYS.alt}-click slaps things off`, 'slap', settings, `${KEYS.altZ} puts the last one back`);
 document.getElementById('options').append(sound.row, size.row, shadow.row, draw.row, slap.row);
 
 // "Off on this site" needs the active tab's host, which activeTab grants

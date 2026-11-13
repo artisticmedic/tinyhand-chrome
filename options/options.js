@@ -1,8 +1,9 @@
-import { el, fadePicker, inkPicker, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
+import { KEYS, el, fadePicker, inkPicker, readSettings, save, sizePicker, soundPicker, styleGrid, switchRow } from '../shared/controls.js';
 
 const settings = await readSettings();
 
 document.getElementById('reset-practice').addEventListener('click', () => location.reload());
+for (const kbd of document.querySelectorAll('kbd[data-key]')) kbd.textContent = KEYS[kbd.dataset.key];
 
 const enabled = switchRow('Show the hand', 'enabled', settings, 'Replaces the cursor on every site.');
 document.getElementById('general').append(enabled.row);
@@ -14,12 +15,12 @@ const size = sizePicker(settings);
 const shadow = switchRow('Shadow under the hand', 'shadow', settings);
 document.getElementById('appearance').append(size.row, shadow.row);
 
-const draw = switchRow('Shift-drag draws', 'draw', settings, 'Hold ⌘ as well to finish with an arrow. Esc clears the drawing.');
+const draw = switchRow('Shift-drag draws', 'draw', settings, `Hold ${KEYS.arrow} as well to finish with an arrow. Esc clears the drawing.`);
 const ink = inkPicker(settings);
 const fade = fadePicker(settings);
 document.getElementById('draw').append(draw.row, ink.row, fade.row);
 
-const slap = switchRow('Slap things off the page', 'slap', settings, 'Hold ⌥ to outline what the hand is over, ⌥-click to slap it away. ⌥Z puts the last one back; reloading brings everything back.');
+const slap = switchRow('Slap things off the page', 'slap', settings, `Hold ${KEYS.alt} to outline what the hand is over, ${KEYS.alt}-click to slap it away. ${KEYS.altZ} puts the last one back; reloading brings everything back.`);
 document.getElementById('slap').append(slap.row);
 
 const sound = soundPicker(settings);
@@ -46,7 +47,14 @@ function renderSites(list) {
   }
   sites.append(el('ul', { class: 'sites' }, list.map((host) => el('li', {}, [
     el('span', { textContent: host }),
-    el('button', { type: 'button', class: 'link', textContent: 'Turn back on', onclick: () => save({ disabledSites: list.filter((h) => h !== host) }) }),
+    el('button', {
+      type: 'button', class: 'link', textContent: 'Turn back on',
+      // Read the list fresh, so a change made in the popup meanwhile isn't lost.
+      onclick: async () => {
+        const { disabledSites = [] } = await chrome.storage.local.get('disabledSites');
+        save({ disabledSites: disabledSites.filter((h) => h !== host) });
+      },
+    }),
   ]))));
 }
 

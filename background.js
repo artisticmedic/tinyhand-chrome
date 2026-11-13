@@ -11,9 +11,19 @@ chrome.runtime.onInstalled.addListener(async ({ reason, previousVersion }) => {
   if (reason === 'update' && previousVersion === '0.1.0') delete stored.size;
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
   await chrome.storage.local.remove('cursors');
+  // Tabs open before an install or update don't have the content script.
+  injectIntoOpenTabs();
   // The Settings page shows the hand and has a place to try drawing and slapping.
   if (reason === 'install') chrome.runtime.openOptionsPage();
 });
+
+async function injectIntoOpenTabs() {
+  for (const tab of await chrome.tabs.query({ url: ['http://*/*', 'https://*/*', 'file://*/*'] })) {
+    chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['content.js'] })
+      // Discarded tabs and pages that refuse injection keep going without it.
+      .catch(() => {});
+  }
+}
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.enabled) showBadge(changes.enabled.newValue);
@@ -34,8 +44,35 @@ function setCursorCss({ css, previous }, sender) {
     .catch(() => {});
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message.action === 'setCursorCss' && sender.tab) setCursorCss(message, sender);
+// Which frame owns each child frame's id, per tab: "tabId:id" -> frameId.
+// A frame passes its pointer events to its parent through here (see "frames"
+// in content.js). After the worker restarts the map is empty; a frame whose id
+// is unknown says hello again and its parent claims it again.
+const parentFrames = new Map();
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  for (const key of parentFrames.keys()) {
+    if (key.startsWith(`${tabId}:`)) parentFrames.delete(key);
+  }
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!sender.tab) return false;
+  if (message.action === 'setCursorCss') {
+    setCursorCss(message, sender);
+  } else if (message.action === 'claimFrame') {
+    parentFrames.set(`${sender.tab.id}:${message.id}`, sender.frameId);
+    sendResponse({});
+  } else if (message.action === 'toParent') {
+    const frameId = parentFrames.get(`${sender.tab.id}:${message.id}`);
+    if (frameId === undefined) {
+      sendResponse({ unknown: true });
+    } else {
+      chrome.tabs.sendMessage(sender.tab.id, { action: 'fromChild', id: message.id, packet: message.packet }, { frameId })
+        .catch(() => {});
+      sendResponse({});
+    }
+  }
   return false;
 });
 

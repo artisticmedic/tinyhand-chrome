@@ -8,12 +8,37 @@
 // Ahmed. Hiding the cursor with a user-origin stylesheet, in shadow roots
 // too, follows Purrsor (github.com/lihbr/purrsor, MIT, © Lucie Haberer).
 
+// Wrapped in a function so a copy injected after an update doesn't collide
+// with the names of the copy it replaces.
+(() => {
+// After an install or update the service worker injects this script into open
+// tabs, which may already run a copy. A live copy answers the announcement and
+// this one quits before it touches anything.
+const INSTANCE_EVENT = 'tinyhand:instance';
+const ALIVE_EVENT = 'tinyhand:alive';
+let answered = false;
+const onAlive = () => { answered = true; };
+document.addEventListener(ALIVE_EVENT, onAlive);
+document.dispatchEvent(new CustomEvent(INSTANCE_EVENT));
+document.removeEventListener(ALIVE_EVENT, onAlive);
+if (answered) return;
+
 const IS_TOP = window === window.top;
-const MESSAGE_KEY = '__tinyhand';
 // The Settings page loads this script too, so you can try the hand there.
 // Extension pages can't take inserted CSS and have no chrome.dom.
 const IS_EXTENSION_PAGE = location.protocol === 'chrome-extension:';
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+// The arrowhead key is Command on a Mac and Ctrl elsewhere, where the Windows
+// key opens the Start menu.
+const IS_MAC = /Mac/.test(navigator.platform);
+const wantsArrow = (event) => (IS_MAC ? event.metaKey : event.ctrlKey);
+
+// Web pages reach the extension's files through the per-session URL that
+// use_dynamic_url gives them. Extension pages use plain paths, since their own
+// content security policy doesn't count that URL as 'self'.
+function extensionUrl(file) {
+  return IS_EXTENSION_PAGE ? `/${file}` : chrome.runtime.getURL(file);
+}
 
 // TinyHand's numbers (ArmView.swift), as fractions of the screen height.
 const GRIP_DEPTH = 0.12; // the stick is held this far below the bottom edge
@@ -55,7 +80,7 @@ function playTap(id) {
   audioContext ??= new AudioContext();
   if (audioContext.state === 'suspended') audioContext.resume();
   if (!buffers.has(id)) {
-    buffers.set(id, fetch(chrome.runtime.getURL(`sounds/tap_${id}.wav`))
+    buffers.set(id, fetch(extensionUrl(`sounds/tap_${id}.wav`))
       .then((response) => response.arrayBuffer())
       .then((data) => audioContext.decodeAudioData(data)));
   }
@@ -135,13 +160,16 @@ const HIDE_CSS = ':root, :root * { cursor: none !important; }';
 // Chromium doesn't apply user stylesheets inside shadow roots, so every shadow
 // root also adopts shadowSheet. chrome.dom reaches closed roots as well.
 const shadowSheet = new CSSStyleSheet();
-const shadowRoots = new WeakSet();
+let shadowRoots = new Set(); // also searched for iframes; pruned when hosts leave
 let watchingShadowRoots = false;
 
+// One callback can report a node and its descendants separately; `seen` keeps
+// each element to a single visit.
 const shadowObserver = new MutationObserver((records) => {
+  const seen = new Set();
   for (const record of records) {
     for (const node of record.addedNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE) findShadowRoots(node);
+      if (node.nodeType === Node.ELEMENT_NODE) findShadowRoots(node, seen);
     }
   }
 });
@@ -157,10 +185,15 @@ function scannedShadowRoot(el) {
   return null;
 }
 
-function findShadowRoots(node) {
-  const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT);
+function findShadowRoots(node, seen = new Set()) {
+  if (seen.has(node)) return;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (el) => (seen.has(el) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
   for (let el = walker.currentNode; el; el = walker.nextNode()) {
-    if (el.nodeType === Node.ELEMENT_NODE) adoptShadowRoot(scannedShadowRoot(el));
+    if (el.nodeType !== Node.ELEMENT_NODE) continue;
+    seen.add(el);
+    adoptShadowRoot(scannedShadowRoot(el));
   }
 }
 
@@ -174,6 +207,12 @@ function adoptShadowRoot(root) {
   shadowRoots.add(root);
   shadowObserver.observe(root, { childList: true, subtree: true });
   findShadowRoots(root);
+}
+
+function stopWatchingShadowRoots() {
+  shadowObserver.disconnect();
+  shadowRoots = new Set();
+  watchingShadowRoots = false;
 }
 
 function watchShadowRoots() {
@@ -294,7 +333,7 @@ function unmountOverlay() {
 
 function loadImage(id) {
   if (!overlay.images.has(id)) {
-    overlay.images.set(id, fetch(chrome.runtime.getURL(`hands/${id}.png`))
+    overlay.images.set(id, fetch(extensionUrl(`hands/${id}.png`))
       .then((response) => response.blob())
       .then((blob) => createImageBitmap(blob)));
   }
@@ -520,8 +559,11 @@ function inkColor() {
   return catalog?.STYLES.find((s) => s.id === settings.style)?.ink || '#8754f2';
 }
 
+const MAX_STROKES = 200;
+
 function startInk(x, y) {
   mountOverlay();
+  if (overlay.strokes.length >= MAX_STROKES) overlay.strokes.shift();
   overlay.strokes.push({
     points: [{ x, y }],
     color: inkColor(),
@@ -683,45 +725,101 @@ function leaveSoon() {
   }, 120);
 }
 
-// Each frame passes pointer events to its parent in its own coordinates; the
-// parent adds the iframe's position and passes them on, up to the top frame.
+// Pointer events go up to the top frame, which draws. See "frames" below.
 function route(type, x, y, buttons = 0, arrow = false) {
-  if (IS_TOP) {
-    if (type === 'ink-start') startInk(x, y);
-    else if (type === 'ink-move') { pointAt(x, y); extendInk(x, y, arrow); }
-    else if (type === 'ink-end') endInk(arrow);
-    else if (type === 'clear') clearInk();
-    else if (type === 'down') pressAt(x, y);
-    else if (type === 'up') { pointAt(x, y); releaseHand(); }
-    else if (type === 'leave') leaveSoon();
-    else if (type === 'release') releaseHand();
-    else if (type === 'slap') startSlap(x, y);
-    else {
-      pointAt(x, y);
-      if (!(buttons & 1)) releaseHand();
-    }
-  } else {
-    window.parent.postMessage({ [MESSAGE_KEY]: type, x, y, buttons, arrow }, '*');
+  if (!IS_TOP) {
+    sendToParent({ type, x, y, buttons, arrow });
+    return;
+  }
+  if (type.startsWith('ink-') && !settings.draw) return;
+  if (type === 'slap' && !settings.slap) return;
+  if (type === 'ink-start') startInk(x, y);
+  else if (type === 'ink-move') { pointAt(x, y); extendInk(x, y, arrow); }
+  else if (type === 'ink-end') endInk(arrow);
+  else if (type === 'clear') clearInk();
+  else if (type === 'down') pressAt(x, y);
+  else if (type === 'up') { pointAt(x, y); releaseHand(); }
+  else if (type === 'leave') leaveSoon();
+  else if (type === 'release') releaseHand();
+  else if (type === 'slap') startSlap(x, y);
+  else {
+    pointAt(x, y);
+    if (!(buttons & 1)) releaseHand();
   }
 }
 
+// ---------------------------------------------------------------- frames
+//
+// A frame posts its parent a random id, and only that. The parent tells the
+// service worker it owns the id, and from then on the frame's pointer events
+// travel frame -> service worker -> parent as extension messages, which the
+// page can neither read nor forge. The parent adds the iframe's position and
+// passes them on, up to the top frame.
+
+const HELLO_KEY = '__tinyhandFrame';
+const ownFrameId = IS_TOP ? null : [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const childFrames = new Map(); // child frame id -> iframe element
+
+function sayHello() {
+  if (!IS_TOP) window.parent.postMessage({ [HELLO_KEY]: ownFrameId }, '*');
+}
+
+function sendToParent(packet) {
+  chrome.runtime.sendMessage({ action: 'toParent', id: ownFrameId, packet }).then(
+    (reply) => { if (reply?.unknown) sayHello(); },
+    () => {} // the extension was reloaded under this page
+  );
+}
+
 function frameElementFor(source) {
-  for (const frame of document.querySelectorAll('iframe, frame')) {
-    if (frame.contentWindow === source) return frame;
+  const roots = [document];
+  for (const root of shadowRoots) {
+    if (root.host.isConnected) roots.push(root);
+    else shadowRoots.delete(root);
+  }
+  for (const root of roots) {
+    for (const frame of root.querySelectorAll('iframe, frame')) {
+      if (frame.contentWindow === source) return frame;
+    }
   }
   return null;
 }
 
-window.addEventListener('message', (event) => {
-  const data = event.data;
-  if (!settings || !data || typeof data[MESSAGE_KEY] !== 'string' || !event.source) return;
-  const frame = frameElementFor(event.source);
-  if (!frame) return;
+// A point in the iframe's viewport, in this window's viewport. Scaling covers
+// iframes shrunk or grown with a CSS transform.
+function framePoint(frame, x, y) {
   const rect = frame.getBoundingClientRect();
   const style = getComputedStyle(frame);
-  const x = data.x + rect.left + frame.clientLeft + (parseFloat(style.paddingLeft) || 0);
-  const y = data.y + rect.top + frame.clientTop + (parseFloat(style.paddingTop) || 0);
-  route(data[MESSAGE_KEY], x, y, data.buttons, data.arrow === true);
+  const sx = frame.offsetWidth ? rect.width / frame.offsetWidth : 1;
+  const sy = frame.offsetHeight ? rect.height / frame.offsetHeight : 1;
+  const left = frame.clientLeft + (parseFloat(style.paddingLeft) || 0);
+  const top = frame.clientTop + (parseFloat(style.paddingTop) || 0);
+  return [rect.left + (left + x) * sx, rect.top + (top + y) * sy];
+}
+
+window.addEventListener('message', (event) => {
+  const id = event.data?.[HELLO_KEY];
+  if (typeof id !== 'string' || id.length > 64 || !event.source) return;
+  const frame = frameElementFor(event.source);
+  if (!frame) return;
+  // The first iframe to claim an id keeps it.
+  const known = childFrames.get(id);
+  if (known && known !== frame && known.isConnected) return;
+  childFrames.set(id, frame);
+  chrome.runtime.sendMessage({ action: 'claimFrame', id }).catch(() => {});
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.action !== 'fromChild' || !settings) return;
+  const frame = childFrames.get(message.id);
+  if (!frame?.isConnected) {
+    childFrames.delete(message.id);
+    return;
+  }
+  const { type, x, y, buttons, arrow } = message.packet || {};
+  if (typeof type !== 'string' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const [px, py] = framePoint(frame, x, y);
+  route(type, px, py, buttons | 0, arrow === true);
 });
 
 function counts(event) {
@@ -737,6 +835,8 @@ window.addEventListener('pointermove', (event) => {
   lastPointer = { x, y };
   if (settings.slap && event.altKey && !gesture) highlight(slapTarget(x, y));
   else unhighlight();
+  // The button came up outside the window, where this frame never heard it.
+  if (gesture && !(event.buttons & 1)) endGesture(x, y, wantsArrow(event));
   if (gesture) {
     if (!gesture.drawing && Math.hypot(x - gesture.x, y - gesture.y) >= INK_START_PX) {
       gesture.drawing = true;
@@ -744,7 +844,7 @@ window.addEventListener('pointermove', (event) => {
       route('ink-start', gesture.x, gesture.y);
     }
     if (gesture.drawing) {
-      route('ink-move', x, y, event.buttons, event.metaKey);
+      route('ink-move', x, y, event.buttons, wantsArrow(event));
       return;
     }
   }
@@ -775,12 +875,15 @@ window.addEventListener('pointerdown', (event) => {
   }
 }, true);
 
+function endGesture(x, y, arrow) {
+  if (gesture?.drawing) route('ink-end', x, y, 0, arrow);
+  gesture = null;
+  unmuteSoon();
+}
+
 window.addEventListener('pointerup', (event) => {
   if (muted) unmuteSoon();
-  if (gesture) {
-    if (gesture.drawing) route('ink-end', event.clientX, event.clientY, 0, event.metaKey);
-    gesture = null;
-  }
+  if (gesture) endGesture(event.clientX, event.clientY, wantsArrow(event));
   if (muted?.has('mouseup')) swallow(event);
   if (!counts(event)) return;
   route('up', event.clientX, event.clientY, event.buttons);
@@ -791,6 +894,8 @@ window.addEventListener('keydown', (event) => {
 }, true);
 
 window.addEventListener('pointercancel', () => {
+  clearTimeout(mutedTimer);
+  muted = null;
   if (!settings) return;
   if (gesture?.drawing) route('ink-end', 0, 0);
   gesture = null;
@@ -826,14 +931,15 @@ if (IS_TOP) {
 
 // ---------------------------------------------------------------- slap to remove
 //
-// Hold Option (Alt) to outline the element under the hand; Option-click slaps
-// it off the page, like VisBug's delete. Option-Z puts the last one back. The
+// Hold Option (Alt elsewhere) to outline the element under the hand;
+// Option-click slaps it off the page, like VisBug's delete. Option-Z puts the
+// last one back. The
 // element is hidden with display: none, not removed, so the page's own scripts
 // still find it, and a reload brings everything back.
 
 let lastPointer = null;
 let highlighted = null; // { el, outline, offset } with the inline values to restore
-const slapped = []; // { el, display } for Option-Z, newest last
+const slapped = []; // { el, display, timer, animation } for Option-Z, newest last
 let muted = null; // Set of mouse event types the page shouldn't see for this press
 let mutedTimer = 0;
 
@@ -861,7 +967,9 @@ for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
   window.addEventListener(type, (event) => {
     if (!muted?.has(type)) return;
     swallow(event);
-    if (type === 'click') muted = null;
+    // The dblclick of a double slap follows its second click; let it be
+    // swallowed too before the press ends.
+    if (type === 'click') setTimeout(() => { muted = null; }, 0);
   }, true);
 }
 
@@ -876,19 +984,39 @@ function deepElementFromPoint(x, y) {
   return el;
 }
 
-// The innermost box under the pointer that's worth slapping: not inline, not
-// tiny, and not the whole document.
+// What a slap takes: the nearest box under the pointer that reads as a unit
+// on screen (a card, a list item, an image, a button), rather than the line
+// of text the pointer happens to be on. Boxes that fill most of the window
+// are passed over; with nothing else, the innermost block goes.
+const SECTION_TAGS = new Set(['SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'FIGURE', 'LI', 'TR', 'TABLE', 'FORM', 'BUTTON', 'IMG', 'VIDEO', 'CANVAS', 'svg', 'IFRAME', 'PICTURE', 'DIALOG']);
+
+function looksLikeBox(el, style) {
+  if (SECTION_TAGS.has(el.tagName)) return true;
+  const background = style.backgroundColor;
+  if (background && !/rgba\([^)]*,\s*0\)|transparent/.test(background)) return true;
+  if (style.backgroundImage !== 'none') return true;
+  if (style.boxShadow !== 'none') return true;
+  return ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(style[`border${side}Width`]) > 0 && style[`border${side}Style`] !== 'none');
+}
+
 function slapTarget(x, y) {
+  const viewArea = window.innerWidth * window.innerHeight;
   let el = deepElementFromPoint(x, y);
+  let fallback = null;
   while (el && el !== document.documentElement && el !== document.body) {
     if (el.style && el !== overlay.host) {
-      const display = getComputedStyle(el).display;
+      const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
-      if (display !== 'inline' && display !== 'contents' && rect.width >= 24 && rect.height >= 16) return el;
+      const block = style.display !== 'inline' && style.display !== 'contents' && rect.width >= 24 && rect.height >= 16;
+      if (block && rect.width * rect.height > viewArea * 0.6) break;
+      if (block) {
+        fallback ??= el;
+        if (looksLikeBox(el, style)) return el;
+      }
     }
     el = el.parentElement || el.getRootNode()?.host || null;
   }
-  return null;
+  return fallback;
 }
 
 function saveProp(el, prop) {
@@ -922,13 +1050,17 @@ function slapAt(x, y) {
   unhighlight();
   route('slap', x, y, 0);
   if (settings.sound) playSlap(SLAP_IMPACT_MS / 1000);
-  if (el) setTimeout(() => knockOff(el), SLAP_IMPACT_MS);
+  if (!el) return;
+  const entry = { el, display: saveProp(el, 'display'), timer: 0, animation: null };
+  slapped.push(entry);
+  entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
 }
 
 // Knocked away to the left, the way the swing goes, then hidden.
 // With Reduce Motion on, it just fades.
-function knockOff(el) {
-  slapped.push({ el, display: saveProp(el, 'display') });
+function knockOff(entry) {
+  entry.timer = 0;
+  const { el } = entry;
   const rect = el.getBoundingClientRect();
   const dx = -(rect.right + 120);
   const animation = reducedMotion?.matches
@@ -938,7 +1070,10 @@ function knockOff(el) {
       { transform: `translate(${dx * 0.35}px, -30px) rotate(-10deg)`, opacity: 1, offset: 0.25 },
       { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
     ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
+  entry.animation = animation;
+  // Option-Z can take it back mid-flight; then there's nothing to hide.
   const hide = () => {
+    if (!slapped.includes(entry)) return;
     el.style.setProperty('display', 'none', 'important');
     animation.cancel();
   };
@@ -948,6 +1083,8 @@ function knockOff(el) {
 function unslap() {
   const last = slapped.pop();
   if (!last) return false;
+  clearTimeout(last.timer);
+  last.animation?.cancel();
   restoreProp(last.el, 'display', last.display);
   last.el.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
   return true;
@@ -987,12 +1124,19 @@ function topHostname() {
 async function apply() {
   const stored = await chrome.storage.local.get(['enabled', 'disabledSites', 'style', 'size', 'shadow', 'sound', 'handSound', 'laserSound', 'slap', 'draw', 'ink', 'fade']);
   const style = stored.style || 'glove';
-  const off = stored.enabled === false || (stored.disabledSites || []).includes(topHostname());
+  // A top-level SVG or XML document can't host the overlay, so it keeps the
+  // real cursor.
+  const xmlTop = IS_TOP && document.documentElement && !(document.documentElement instanceof HTMLElement);
+  const off = stored.enabled === false || xmlTop || (stored.disabledSites || []).includes(topHostname());
   if (off) {
     settings = null;
     unhighlight();
+    gesture = null;
+    clearTimeout(mutedTimer);
+    muted = null;
     setStyles(null);
     shadowSheet.replaceSync('');
+    stopWatchingShadowRoots();
     if (IS_TOP) unmountOverlay();
     return;
   }
@@ -1014,11 +1158,14 @@ async function apply() {
   if (!settings.slap) unhighlight();
 
   setStyles(HIDE_CSS);
-  shadowSheet.replaceSync('* { cursor: none !important; }');
+  // :is() takes its most specific argument, so this matches everything with
+  // the weight of three ids and beats a component's own !important rules.
+  shadowSheet.replaceSync(':is(*, #tinyhand#tinyhand#tinyhand) { cursor: none !important; }');
   watchShadowRoots();
+  sayHello();
 
   if (IS_TOP) {
-    catalog ??= await import(chrome.runtime.getURL('shared/catalog.js'));
+    catalog ??= await import(extensionUrl('shared/catalog.js'));
     if (style !== previousStyle || !overlay.image) useStyle(style);
     if (overlay.host?.isConnected) schedule();
   }
@@ -1028,4 +1175,19 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') apply();
 });
 
+// When a new copy announces itself, a live copy answers so the newcomer quits,
+// and a copy cut off from the extension by an update hands the page over.
+document.addEventListener(INSTANCE_EVENT, () => {
+  if (chrome.runtime?.id) {
+    document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
+    return;
+  }
+  settings = null;
+  unhighlight();
+  shadowSheet.replaceSync('');
+  stopWatchingShadowRoots();
+  if (IS_TOP) unmountOverlay();
+});
+
 apply();
+})();

@@ -4,6 +4,12 @@
 
 import { DEFAULTS, FADES, HANDS, INKS, PINNED, SETTING_KEYS, SIZES, SOUNDS, STYLES } from './catalog.js';
 
+// Key names as this computer labels them.
+const IS_MAC = /Mac/.test(navigator.platform);
+export const KEYS = IS_MAC
+  ? { alt: '⌥', arrow: '⌘', altZ: '⌥Z' }
+  : { alt: 'Alt', arrow: 'Ctrl', altZ: 'Alt+Z' };
+
 export async function readSettings() {
   return { ...DEFAULTS, ...(await chrome.storage.local.get(SETTING_KEYS)) };
 }
@@ -15,7 +21,7 @@ export function save(values) {
 let previewAudio;
 export function previewSound(id) {
   previewAudio?.pause();
-  previewAudio = new Audio(chrome.runtime.getURL(`sounds/tap_${id}.wav`));
+  previewAudio = new Audio(`/sounds/tap_${id}.wav`);
   previewAudio.play().catch(() => {});
 }
 
@@ -54,7 +60,7 @@ export function styleGrid(settings) {
   const buttons = orderedStyles().map((style) => {
     const art = style.id === 'laser'
       ? el('span', { class: 'laser-dot' })
-      : el('img', { src: chrome.runtime.getURL(`hands/${style.id}.png`), alt: '', loading: 'lazy' });
+      : el('img', { src: `/hands/${style.id}.png`, alt: '', loading: 'lazy' });
     const button = el('button', {
       type: 'button', class: 'style', title: style.name, role: 'radio',
       'aria-label': style.name, dataset: { style: style.id },
