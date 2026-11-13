@@ -2,23 +2,16 @@
 // document, including inside the shadow roots the fixture creates. Loaded by
 // every fixture page. Call tinyhandCheck() from DevTools, or press "Run checks".
 
-// TinyHand's styles are a user-origin sheet, invisible to the page, so the
-// idle and pressed values are read off <html> with the pressed attribute off and on.
+// TinyHand hides the real cursor with a user-origin sheet, invisible to the
+// page, so the check reads the computed cursor: every case should be `none`.
 function tinyhandSignatures() {
-  const root = document.documentElement;
-  const wasPressed = root.hasAttribute('data-tinyhand-pressed');
-  root.removeAttribute('data-tinyhand-pressed');
-  const idle = getComputedStyle(root).cursor;
-  root.setAttribute('data-tinyhand-pressed', '');
-  const pressed = getComputedStyle(root).cursor;
-  if (!wasPressed) root.removeAttribute('data-tinyhand-pressed');
-  return idle.includes('url(') ? { idle, pressed } : null;
+  const idle = getComputedStyle(document.documentElement).cursor;
+  return idle === 'none' ? { idle } : null;
 }
 
 function tinyhandClassify(cursor, sigs) {
   if (!sigs) return 'no tinyhand style';
   if (cursor === sigs.idle) return 'idle';
-  if (cursor === sigs.pressed) return 'pressed';
   return cursor;
 }
 

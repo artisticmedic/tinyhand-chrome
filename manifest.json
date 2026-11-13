@@ -1,11 +1,17 @@
 {
   "manifest_version": 3,
   "name": "TinyHand",
-  "version": "0.1.0",
-  "description": "TinyHand's tiny hand on a stick as your cursor, with its tap sounds. Based on TinyHand by Kamran Ahmed.",
+  "version": "0.2.0",
+  "description": "TinyHand's tiny hand on a stick, reaching up from the bottom of the window to your pointer, with its tap sounds. Based on TinyHand by Kamran Ahmed.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "activeTab", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -21,11 +27,15 @@
   },
   "commands": {
     "toggle-hand": {
-      "suggested_key": { "default": "Alt+Shift+H" },
+      "suggested_key": {
+        "default": "Alt+Shift+H"
+      },
       "description": "Turn the hand on or off"
     },
     "toggle-sound": {
-      "suggested_key": { "default": "Alt+Shift+T" },
+      "suggested_key": {
+        "default": "Alt+Shift+T"
+      },
       "description": "Turn the tap sound on or off"
     }
   },
@@ -41,8 +51,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "match_origin_as_fallback": true
@@ -50,8 +64,14 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["sounds/*.wav"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "sounds/*.wav",
+        "hands/*.png",
+        "shared/catalog.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

@@ -8,11 +8,9 @@ document.getElementById('general').append(enabled.row);
 const grid = styleGrid(settings);
 document.getElementById('styles').append(grid.grid);
 
-// The cursor as Chrome will draw it: hover the box to try it, press to tap.
-const preview = el('div', { class: 'preview' }, [el('p', { class: 'muted', textContent: 'Point here to try it. Press to tap.' })]);
 const size = sizePicker(settings);
 const shadow = switchRow('Shadow under the hand', 'shadow', settings);
-document.getElementById('appearance').append(preview, size.row, shadow.row);
+document.getElementById('appearance').append(size.row, shadow.row);
 
 const sound = soundPicker(settings);
 const laser = switchRow('Laser dot taps too', 'laserSound', settings, 'Off by default, for quiet pointing.');
@@ -42,7 +40,7 @@ function renderSites(list) {
   ]))));
 }
 
-function render(s, cursors) {
+function render(s) {
   enabled.input.checked = s.enabled;
   document.body.classList.toggle('off', !s.enabled);
   grid.sync(s.style);
@@ -52,16 +50,10 @@ function render(s, cursors) {
   laser.input.checked = s.laserSound;
   laser.input.disabled = !s.handSound;
   renderSites(s.disabledSites);
-  if (cursors?.idle) {
-    preview.style.cursor = cursors.idle;
-    preview.onpointerdown = () => { preview.style.cursor = cursors.pressed; };
-    preview.onpointerup = preview.onpointerleave = () => { preview.style.cursor = cursors.idle; };
-  }
 }
 
 async function refresh() {
-  const { cursors } = await chrome.storage.local.get('cursors');
-  render(await readSettings(), cursors);
+  render(await readSettings());
 }
 refresh();
 

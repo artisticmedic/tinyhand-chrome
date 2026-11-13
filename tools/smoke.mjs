@@ -1,113 +1,103 @@
-// Headless smoke test: loads the extension in Playwright's Chromium, waits for
-// the service worker to draw the cursors, checks the fixture's computed
-// cursors, and writes a contact sheet of the drawn images to out/.
-// Usage: node tools/smoke.mjs [style ...]
+// Headless smoke test. Loads the extension in Chrome for Testing (Playwright's
+// copy), checks that every fixture case hides the real cursor, drives the
+// pointer, and screenshots the drawn hand to out/. The overlay is page
+// content, so headless screenshots show it; the real pointer they don't.
+// Needs the fixture served on 8741 and 8742 (see README).
 import { createRequire } from 'node:module';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
 const require = createRequire(import.meta.url);
-const pwPath = process.env.PLAYWRIGHT_CORE || 'playwright-core';
-const { chromium } = require(pwPath);
-
+const { chromium } = require(process.env.PLAYWRIGHT_CORE || 'playwright-core');
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const out = path.join(root, 'out');
 mkdirSync(out, { recursive: true });
 const exe = process.env.CHROMIUM || path.join(os.homedir(), 'Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-const profile = path.join(os.tmpdir(), `tinyhand-smoke-${Date.now()}`);
 
-const context = await chromium.launchPersistentContext(profile, {
+const context = await chromium.launchPersistentContext(path.join(os.tmpdir(), `tinyhand-smoke-${Date.now()}`), {
   executablePath: exe,
   headless: true,
   args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`],
-  viewport: { width: 1200, height: 800 },
+  viewport: { width: 1280, height: 800 },
+  screen: { width: 1512, height: 982 },
+  deviceScaleFactor: 2,
 });
 let [worker] = context.serviceWorkers();
 worker ??= await context.waitForEvent('serviceworker');
-const id = new URL(worker.url()).host;
-console.log('extension id', id);
+const set = (values) => worker.evaluate((v) => chrome.storage.local.set(v), values);
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+for (let i = 0; i < 50 && !(await worker.evaluate(() => chrome.storage.local.get('style'))).style; i++) await wait(100);
+console.log('defaults', JSON.stringify(await worker.evaluate(() => chrome.storage.local.get(null))));
 
-const waitCursors = async (pred = () => true) => {
-  for (let i = 0; i < 100; i++) {
-    const c = await worker.evaluate(() => chrome.storage.local.get(null));
-    if (c.cursors && pred(c)) return c;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error('cursors never appeared');
-};
-
-const first = await waitCursors();
-console.log('defaults', JSON.stringify({ ...first, cursors: undefined }));
-console.log('cursor css bytes idle', first.cursors.idle.length, 'pressed', first.cursors.pressed.length, 'length', first.cursors.length, 'sound', first.cursors.sound);
-
-const styles = process.argv.slice(2);
-const sheet = await context.newPage();
-await sheet.goto(`chrome-extension://${id}/test/sheet.html?styles=${encodeURIComponent(styles.join(','))}`);
-await sheet.waitForFunction(() => window.sheetDone === true, null, { timeout: 60000 });
-const sheetInfo = await sheet.evaluate(() => window.sheetInfo);
-console.log(JSON.stringify(sheetInfo, null, 1));
-await sheet.screenshot({ path: path.join(out, 'sheet.png'), fullPage: true });
-
-// Fixture: computed cursors in every frame, shadow roots, the pressed state.
 const port = Number(process.env.FIXTURE_PORT || 8741);
 const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
+page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404')) errors.push(m.text()); });
 await page.goto(`http://127.0.0.1:${port}/calendar.html`);
-await page.waitForFunction(() => getComputedStyle(document.documentElement).cursor.includes('image-set'), null, { timeout: 10000 });
-await page.waitForTimeout(800);
-const reports = await page.evaluate(() => window.tinyhandReport());
+await page.waitForFunction(() => getComputedStyle(document.documentElement).cursor === 'none', null, { timeout: 10000 });
+await wait(800);
+
 let fails = 0;
-for (const report of reports) {
+for (const report of await page.evaluate(() => window.tinyhandReport())) {
   const bad = report.rows.filter((r) => !r.pass);
   fails += bad.length;
-  console.log(`${report.frame.replace(/^http:\/\/127.0.0.1:\d+/, '')}: ${report.rows.length - bad.length}/${report.rows.length} pass${report.styleInjected ? '' : ' (no style)'}`);
-  for (const r of bad) console.log('  FAIL', r.case, 'expect', r.expect, 'got', String(r.got).slice(0, 60));
+  console.log(`cursor hidden ${report.frame.replace(/^http:\/\/127.0.0.1:\d+/, '')}: ${report.rows.length - bad.length}/${report.rows.length}`);
+  for (const r of bad) console.log('  FAIL', r.case, 'got', String(r.got).slice(0, 60));
 }
-// The tap sound: WebAudio reports the content script's context and each
-// buffer source it starts.
+
+const shots = [];
+async function shot(name, x, y, { down = false, settle = 1500 } = {}) {
+  await page.mouse.move(x, y, { steps: 8 });
+  if (down) await page.mouse.down();
+  await wait(settle);
+  const file = path.join(out, `smoke-${name}.png`);
+  await page.screenshot({ path: file });
+  if (down) await page.mouse.up();
+  shots.push({ name, file, x, y });
+}
+
 const cdp = await context.newCDPSession(page);
-const audio = { contexts: [], sources: 0 };
-cdp.on('WebAudio.contextCreated', (e) => audio.contexts.push(e.context.contextState));
-cdp.on('WebAudio.contextChanged', (e) => audio.contexts.push(e.context.contextState));
+const audio = { states: [], sources: 0 };
+cdp.on('WebAudio.contextCreated', (e) => audio.states.push(e.context.contextState));
+cdp.on('WebAudio.contextChanged', (e) => audio.states.push(e.context.contextState));
 cdp.on('WebAudio.audioNodeCreated', (e) => { if (e.node.nodeType === 'AudioBufferSourceNode') audio.sources++; });
 await cdp.send('WebAudio.enable');
-await page.mouse.move(400, 300);
-await page.mouse.down();
-const pressed = await page.evaluate(() => document.documentElement.hasAttribute('data-tinyhand-pressed'));
-await page.mouse.up();
-const heldAfterUp = await page.evaluate(() => document.documentElement.hasAttribute('data-tinyhand-pressed'));
-await page.waitForTimeout(200);
-const releasedLater = !(await page.evaluate(() => document.documentElement.hasAttribute('data-tinyhand-pressed')));
-console.log('pressed on mousedown', pressed, '| still pressed right after a quick mouseup', heldAfterUp, '| released after 200ms', releasedLater);
-await page.waitForTimeout(1000);
-console.log('audio context states', audio.contexts.join(' -> ') || 'none', '| buffer sources started', audio.sources);
-console.log('page errors', errors.length ? errors : 'none');
 
-// Turning the hand off removes the styles; turning it back on restores them.
-await worker.evaluate(() => chrome.storage.local.set({ enabled: false }));
-await page.waitForTimeout(500);
-const offCursor = await page.evaluate(() => getComputedStyle(document.documentElement).cursor);
-await worker.evaluate(() => chrome.storage.local.set({ enabled: true }));
-await page.waitForTimeout(500);
-const onCursor = await page.evaluate(() => getComputedStyle(document.documentElement).cursor.slice(0, 30));
-console.log('cursor when off:', offCursor, '| when back on:', onCursor);
+await shot('middle', 640, 300);
+await shot('pressed', 640, 300, { down: true, settle: 30 });
+await shot('left', 120, 250);
+await shot('bottom-right', 1200, 760);
+// Into the cross-origin iframe: the hand has to follow via postMessage.
+const frameBox = await page.locator('#f-cross').boundingBox();
+await shot('cross-origin-iframe', frameBox.x + 60, frameBox.y + 30);
+await wait(800);
+console.log('audio:', audio.states.join(' -> ') || 'none', '| buffer sources started', audio.sources);
 
-// Changing the style redraws the cursor.
-const before = (await waitCursors()).cursors.idle;
-await worker.evaluate(() => chrome.storage.local.set({ style: 'robot' }));
-const after = await waitCursors((c) => c.cursors.idle !== before);
-console.log('style change redraws:', after.cursors.idle !== before, '| sound', after.cursors.sound);
-await worker.evaluate(() => chrome.storage.local.set({ style: 'glove' }));
-await waitCursors((c) => c.cursors.idle === before);
-
-for (const [name, url, size] of [['popup', 'popup/popup.html', { width: 340, height: 560 }], ['options', 'options/options.html', { width: 900, height: 1500 }]]) {
-  const p = await context.newPage();
-  await p.setViewportSize(size);
-  await p.goto(`chrome-extension://${id}/${url}`);
-  await p.waitForTimeout(600);
-  await p.screenshot({ path: path.join(out, `${name}.png`), fullPage: true });
+for (const [style, extra] of [['robot', {}], ['laser', {}], ['glove', { shadow: false }]]) {
+  await set({ style, shadow: true, ...extra });
+  await wait(500);
+  await shot(`${style}${extra.shadow === false ? '-noshadow' : ''}`, 640, 300);
 }
+await set({ style: 'glove', shadow: true });
+
+await set({ enabled: false });
+await wait(600);
+const offCursor = await page.evaluate(() => getComputedStyle(document.documentElement).cursor);
+const overlayLeft = await page.evaluate(() => !!document.querySelector('tinyhand-overlay'));
+await shot('off', 640, 300, { settle: 300 });
+await set({ enabled: true });
+await wait(600);
+const onCursor = await page.evaluate(() => getComputedStyle(document.documentElement).cursor);
+console.log('off: cursor', offCursor, '| overlay in DOM', overlayLeft, '| back on: cursor', onCursor);
+
+// A modal dialog goes in the top layer; the overlay should stay above it.
+await page.evaluate(() => document.querySelector('dialog')?.showModal());
+await shot('over-modal-dialog', 640, 300);
+await page.keyboard.press('Escape');
+
+console.log('page errors:', errors.length ? errors : 'none');
 console.log(fails ? `${fails} fixture failures` : 'fixture: all pass');
+console.log('SHOTS', JSON.stringify(shots));
 await context.close();

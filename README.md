@@ -1,13 +1,14 @@
 # TinyHand for Chrome
 
-TinyHand's tiny hand on a stick as your cursor in Chrome and other Chromium
-browsers, with its tap sounds. A port of the cursor part of
+TinyHand's tiny hand on a stick, reaching up from the bottom of the window to
+your pointer in Chrome and other Chromium browsers, with its tap sounds. A port of the cursor part of
 [TinyHand](https://github.com/nilbuild/tinyhand), the Mac app by Kamran Ahmed.
 
 - 36 hands and the laser dot. Cursor glove is the default.
 - A tap on every click: the hand dips and its shadow tucks in, and the tap
   sound plays. 15 sounds, or off.
-- Size, shadow, and per-site off switches in the popup and on the Settings page.
+- Size (TinyHand's 10%, 13% or 17% of the screen height), shadow, and per-site
+  off switches in the popup and on the Settings page.
 - Shortcuts: ⌥⇧H turns the hand on or off, ⌥⇧T turns the tap sound on or off.
 
 ## Load it
@@ -20,38 +21,32 @@ There is no build step.
 
 ## How it works
 
-The service worker draws the cursor images with OffscreenCanvas whenever a
-setting changes (`shared/render.js`) and stores them as CSS `cursor` values.
-The content script asks the service worker to insert them as a user-origin
-stylesheet, so a site's own `cursor` rules can't win, and adopts the same rules
-into shadow roots.
+The content script hides the real cursor in every frame with a user-origin
+stylesheet (`cursor: none`), so a site's own `cursor` rules can't win, and
+adopts the same rule into shadow roots. In the top frame it draws the hand on
+a full-window canvas: the stick is held below the bottom edge and to the right
+of the pointer, trails it as it moves, and the hand turns so its fingertip lands
+on the pointer. These are the numbers from TinyHand's `ArmView.swift`. Frames
+pass the pointer up to their parent with `postMessage`, so the hand follows it
+into iframes.
 
-Chrome's limits shape the images:
-
-- A cursor image can be at most 128×128 CSS px. Images are drawn at 2x and
-  listed with `image-set(... 2x)`, so they count as half their pixel size and
-  stay sharp on Retina screens.
-- Chrome skips a cursor image that would stick out of the viewport. Each cursor
-  lists the hand at full, 60% and 36% size before `auto`, so near the right and
-  bottom edges the hand shrinks, and right at the edge it becomes the arrow.
-
-The Large hand is 72 px from fingertip to wrist, leaning 24° with a fading stub
-of stick and a shadow; that comes to about 87×128 px, the limit. TinyHand's own
-hand is 13% of the screen height, about 128 pt on a laptop, which can't fit once
-the lean and shadow are added.
+The canvas sits in a closed shadow root on a manual popover, so it stays in the
+top layer above dialogs and fullscreen elements, with `pointer-events: none` so
+clicks reach the page.
 
 ## Differences from the Mac app
 
-- The stick is a short stub that fades out, not a full stick from the bottom of
-  the screen, and the lean is fixed rather than following the pointer.
 - Clicks still click. In TinyHand a click is only a tap.
 - No drawing, no toolbar, no custom hands.
+- The hand only shows inside web pages, not over the browser's own UI or on
+  pages extensions can't run on (`chrome://` pages, the Web Store).
 
 ## Test
 
 `test/` has a calendar-like fixture with shadow roots, iframes and a head
 rewrite (from Purrsor). `tools/smoke.mjs` loads the extension headlessly,
-checks every fixture case, and writes a contact sheet to `out/`:
+checks that every fixture case hides the cursor, and screenshots the hand to
+`out/`:
 
 ```sh
 python3 -m http.server 8741 --bind 127.0.0.1 -d test &

@@ -1,49 +1,20 @@
 // TinyHand for Chrome - service worker
-// Owns the settings defaults, draws the cursor images whenever a setting that
-// shapes them changes, and inserts each frame's cursor stylesheet.
+// Owns the settings defaults, inserts each frame's cursor stylesheet, and
+// handles the keyboard shortcuts.
 
 import { DEFAULTS, SETTING_KEYS } from './shared/catalog.js';
-import { renderCursors, RENDER_VERSION } from './shared/render.js';
 
-const RENDER_KEYS = ['style', 'size', 'shadow', 'sound', 'handSound', 'laserSound'];
-
-async function readSettings() {
-  return { ...DEFAULTS, ...(await chrome.storage.local.get(SETTING_KEYS)) };
-}
-
-// Renders run one at a time. A change that arrives while one is waiting to
-// start rides along with it instead of queueing another.
-let renders = Promise.resolve();
-let waiting = false;
-
-function rerender() {
-  if (waiting) return renders;
-  waiting = true;
-  renders = renders
-    .then(async () => {
-      waiting = false;
-      const cursors = await renderCursors(await readSettings());
-      await chrome.storage.local.set({ cursors });
-    })
-    .catch((error) => console.error('TinyHand: could not draw the cursor', error));
-  return renders;
-}
-
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason, previousVersion }) => {
   const stored = await chrome.storage.local.get(SETTING_KEYS);
+  // 0.1.0 drew the hand as a cursor image, where Large was the biggest that
+  // fit. Sizes are now TinyHand's screen fractions, and Medium is its default.
+  if (reason === 'update' && previousVersion === '0.1.0') delete stored.size;
   await chrome.storage.local.set({ ...DEFAULTS, ...stored });
-  rerender();
-});
-
-// Covers a render that failed or an update that changed how cursors are drawn.
-chrome.storage.local.get('cursors').then(({ cursors }) => {
-  if (cursors?.version !== RENDER_VERSION) rerender();
+  await chrome.storage.local.remove('cursors');
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (RENDER_KEYS.some((key) => key in changes)) rerender();
-  if (changes.enabled) showBadge(changes.enabled.newValue);
+  if (area === 'local' && changes.enabled) showBadge(changes.enabled.newValue);
 });
 
 // Insertions and removals run one at a time, in the order content scripts

@@ -67,19 +67,19 @@ export const SOUNDS = [
   { id: 'chirp', name: 'Chirp' },
 ];
 
-// Hand length, fingertip to wrist, in CSS pixels. "large" is the biggest that
-// fits Chrome's 128px cursor limit once the lean, stick and shadow are added.
+// Hand length, fingertip to wrist, as a fraction of the screen height, like
+// TinyHand's size slider (0.08 to 0.20, default 0.13).
 export const SIZES = [
-  { id: 'small', name: 'Small', length: 44 },
-  { id: 'medium', name: 'Medium', length: 58 },
-  { id: 'large', name: 'Large', length: 72 },
+  { id: 'small', name: 'Small', frac: 0.10 },
+  { id: 'medium', name: 'Medium', frac: 0.13 },
+  { id: 'large', name: 'Large', frac: 0.17 },
 ];
 
 // Tim's TinyHand settings: glove, click, shadow on, hand taps on, laser quiet.
 export const DEFAULTS = {
   enabled: true,
   style: 'glove',
-  size: 'large',
+  size: 'medium',
   shadow: true,
   sound: 'click',
   handSound: true,
