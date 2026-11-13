@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TinyHand</title>
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="../icons/icon32.png" alt="" width="20" height="20">
+    <h1>TinyHand</h1>
+    <span id="current" class="muted"></span>
+    <input id="enabled" type="checkbox" role="switch" aria-label="Show the hand">
+  </header>
+  <main>
+    <section class="card styles-card" id="styles"></section>
+    <section class="card" id="options"></section>
+    <section class="card" id="site"></section>
+  </main>
+  <footer>
+    <span class="muted" id="shortcut"></span>
+    <button type="button" class="link" id="settings">Settings</button>
+  </footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

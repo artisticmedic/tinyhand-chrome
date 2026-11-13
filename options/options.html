@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TinyHand Settings</title>
+  <link rel="stylesheet" href="../shared/ui.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <header>
+      <img src="../icons/icon128.png" alt="" width="40" height="40">
+      <div>
+        <h1>TinyHand</h1>
+        <p class="muted">A tiny hand on a stick for your cursor.</p>
+      </div>
+    </header>
+
+    <h2>Pointer</h2>
+    <section class="card" id="general"></section>
+    <section class="card styles-card" id="styles"></section>
+
+    <h2>Appearance</h2>
+    <section class="card" id="appearance"></section>
+
+    <h2>Sound</h2>
+    <section class="card" id="sound"></section>
+
+    <h2>Keyboard shortcuts</h2>
+    <section class="card" id="shortcuts"></section>
+
+    <h2>Turned off on</h2>
+    <section class="card" id="sites"></section>
+
+    <h2>About</h2>
+    <section class="card about">
+      <p>The hands and tap sounds are from <a href="https://github.com/nilbuild/tinyhand" target="_blank" rel="noopener">TinyHand</a> by Kamran Ahmed, a Mac app, used under its MIT license. The stylesheet approach follows <a href="https://github.com/lihbr/purrsor" target="_blank" rel="noopener">Purrsor</a> by Lucie Haberer, also MIT.</p>
+      <p class="muted">Chrome draws a cursor image only while it fits inside the page, so near the right and bottom edges the hand shrinks, and right at the edge it becomes the normal arrow.</p>
+    </section>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TinyHand contact sheet</title>
+  <style>
+    body { font: 12px/1.4 -apple-system, system-ui, sans-serif; margin: 16px; background: #fff; color: #222; }
+    h2 { font-size: 13px; margin: 18px 0 6px; }
+    .row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+    .cell { display: grid; gap: 4px; justify-items: start; }
+    .frame { position: relative; outline: 1px dashed #c9c9d1; }
+    .frame.light { background: #f3f3f5; }
+    .frame.dark { background: #26262b; }
+    .frame img { display: block; }
+    .hot { position: absolute; width: 9px; height: 9px; margin: -4px 0 0 -4px; border: 1px solid #ff2a1f; border-radius: 50%; }
+    .label { color: #666; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <h1 style="font-size:15px">Cursor images as drawn by shared/render.js, at CSS size. Red ring: hotspot. Dashed box: image bounds.</h1>
+  <div id="out"></div>
+  <script type="module" src="sheet.js"></script>
+</body>
+</html>

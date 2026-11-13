@@ -1,0 +1,123 @@
+// The pointer, sound and appearance controls, shared by the popup and the
+// Settings page. Each control writes straight to chrome.storage.local; the
+// service worker redraws the cursor from there.
+
+import { DEFAULTS, HANDS, PINNED, SETTING_KEYS, SIZES, SOUNDS, STYLES } from './catalog.js';
+
+export async function readSettings() {
+  return { ...DEFAULTS, ...(await chrome.storage.local.get(SETTING_KEYS)) };
+}
+
+export function save(values) {
+  return chrome.storage.local.set(values);
+}
+
+let previewAudio;
+export function previewSound(id) {
+  previewAudio?.pause();
+  previewAudio = new Audio(chrome.runtime.getURL(`sounds/tap_${id}.wav`));
+  previewAudio.play().catch(() => {});
+}
+
+function el(tag, props = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'class') node.className = value;
+    else if (key === 'dataset') Object.assign(node.dataset, value);
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if (key in node) node[key] = value;
+    else node.setAttribute(key, value);
+  }
+  node.append(...children);
+  return node;
+}
+
+// onChange replaces the default of saving the switch under `key`.
+export function switchRow(label, key, settings, detail, onChange) {
+  const input = el('input', {
+    type: 'checkbox', role: 'switch', checked: !!settings[key],
+    onchange: () => (onChange ? onChange(input.checked) : save({ [key]: input.checked })),
+  });
+  const text = el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: label })]);
+  if (detail) text.append(el('span', { class: 'row-detail', textContent: detail }));
+  return { row: el('label', { class: 'row' }, [text, input]), input };
+}
+
+// Pinned styles first, in TinyHand's toolbar order, then the rest.
+function orderedStyles() {
+  const pinned = PINNED.map((id) => STYLES.find((s) => s.id === id));
+  return [...pinned, ...STYLES.filter((s) => !PINNED.includes(s.id))];
+}
+
+export function styleGrid(settings) {
+  const grid = el('div', { class: 'styles', role: 'radiogroup', 'aria-label': 'Pointer' });
+  const buttons = orderedStyles().map((style) => {
+    const art = style.id === 'laser'
+      ? el('span', { class: 'laser-dot' })
+      : el('img', { src: chrome.runtime.getURL(`hands/${style.id}.png`), alt: '', loading: 'lazy' });
+    const button = el('button', {
+      type: 'button', class: 'style', title: style.name, role: 'radio',
+      'aria-label': style.name, dataset: { style: style.id },
+      onclick: () => save({ style: style.id }),
+    }, [art]);
+    if (PINNED.includes(style.id)) button.classList.add('pinned');
+    return button;
+  });
+  grid.append(...buttons);
+  const sync = (id) => {
+    for (const b of buttons) b.setAttribute('aria-checked', String(b.dataset.style === id));
+  };
+  sync(settings.style);
+  return { grid, sync };
+}
+
+export function soundPicker(settings) {
+  const select = el('select', { 'aria-label': 'Tap sound' }, [
+    el('option', { value: 'off', textContent: 'Off' }),
+    ...SOUNDS.map((s) => el('option', { value: s.id, textContent: s.name })),
+  ]);
+  const sync = (s) => { select.value = s.handSound ? s.sound : 'off'; };
+  sync(settings);
+  select.addEventListener('change', () => {
+    if (select.value === 'off') {
+      save({ handSound: false });
+    } else {
+      save({ sound: select.value, handSound: true });
+      previewSound(select.value);
+    }
+  });
+  const play = el('button', {
+    type: 'button', class: 'icon-button', title: 'Play', 'aria-label': 'Play the tap sound',
+    onclick: () => previewSound(select.value === 'off' ? settings.sound : select.value),
+  });
+  play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  const row = el('div', { class: 'row' }, [
+    el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: 'Tap sound' })]),
+    el('span', { class: 'row-controls' }, [play, select]),
+  ]);
+  return { row, sync };
+}
+
+export function sizePicker(settings) {
+  const group = el('div', { class: 'segmented', role: 'radiogroup', 'aria-label': 'Size' });
+  const buttons = SIZES.map((size) => el('button', {
+    type: 'button', role: 'radio', textContent: size.name, dataset: { size: size.id },
+    onclick: () => save({ size: size.id }),
+  }));
+  group.append(...buttons);
+  const sync = (id) => {
+    for (const b of buttons) b.setAttribute('aria-checked', String(b.dataset.size === id));
+  };
+  sync(settings.size);
+  const row = el('div', { class: 'row' }, [
+    el('span', { class: 'row-text' }, [el('span', { class: 'row-label', textContent: 'Size' })]),
+    group,
+  ]);
+  return { row, sync };
+}
+
+export function handName(id) {
+  return STYLES.find((s) => s.id === id)?.name ?? id;
+}
+
+export { el, HANDS };

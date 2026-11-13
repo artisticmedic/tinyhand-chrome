@@ -1,0 +1,25 @@
+body { width: 340px; }
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 10px;
+}
+
+header h1 { font-size: 14px; }
+header #current { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+main { padding: 0 10px; }
+
+.styles-card { padding: 8px; max-height: 214px; overflow-y: auto; }
+
+body.off main { opacity: 0.45; pointer-events: none; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px 12px;
+  font-size: 12px;
+}
