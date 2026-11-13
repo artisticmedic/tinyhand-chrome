@@ -12,7 +12,7 @@ browsers, with its tap sounds. A port of the cursor part of
 
 ## Load it
 
-1. Open `chrome://extensions` (in Dia, `dia://extensions`).
+1. Open `chrome://extensions`.
 2. Turn on Developer mode.
 3. Click "Load unpacked" and choose this folder.
 
