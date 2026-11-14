@@ -38,7 +38,10 @@ into `dist/` for the Chrome Web Store.
 
 The content script hides the real cursor in every frame with a user-origin
 stylesheet (`cursor: none`), which a site's own cursor rules can't override,
-and adopts the same rule into shadow roots. In the top frame it draws on two
+and adopts the same rule into shadow roots. Chrome leaves that stylesheet in
+open pages after an update or uninstall, so it only applies while `<html>`
+carries an attribute that's random per copy of the script; a copy left behind
+removes its attribute, overlay and slaps the next time the pointer moves. In the top frame it draws on two
 canvases: the drawing underneath, and the hand on top with TinyHand's shadow
 as a CSS drop shadow. The stick is held below the bottom edge and to the right
 of the pointer and trails it, and the hand turns so its fingertip lands on the
@@ -87,6 +90,8 @@ node tools/smoke.mjs    # cursor hidden everywhere, hand drawn, on/off, dialogs
 node tools/slap.mjs     # outline, slap, page sees no click, ⌥Z
 node tools/draw.mjs     # strokes, arrow, fade, Esc, iframe, still Shift-click
 node tools/inject.mjs   # a second injected copy changes nothing; no pointer data reaches the page
+node tools/edges.mjs    # long drags, closed shadow roots, touch, blur, frame floods, rotated frames
+node tools/update.mjs   # a real reload over an open tab, then off, then disabled
 ```
 
 `EXT_DIR=path` runs them against another copy, such as the unzipped package.
