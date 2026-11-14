@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TinyHand fixture: update</title>
+  <style>
+    body { margin: 0; padding: 24px; font: 22px system-ui, sans-serif; }
+    #box { width: 320px; height: 160px; margin: 24px 0; display: flex; align-items: center; justify-content: center; background: #e8f0fe; border-radius: 12px; }
+    iframe { width: 640px; height: 110px; border: 1px solid #aaa; }
+  </style>
+</head>
+<body>
+  <p id="status" role="status"></p>
+  <div id="box">Slap me</div>
+  <iframe id="child" title="child"></iframe>
+  <script>
+    const framed = location.search === '?frame';
+    const box = document.getElementById('box');
+    const child = document.getElementById('child');
+    if (framed) {
+      box.remove();
+      child.remove();
+    } else {
+      child.src = `${location.protocol}//${location.hostname}:${Number(location.port) + 1}/update.html?frame`;
+    }
+    setInterval(() => {
+      const parts = [framed ? 'frame' : 'top', `cursor ${getComputedStyle(document.documentElement).cursor}`];
+      if (!framed) {
+        parts.push(`overlays ${document.querySelectorAll('html > div[popover]').length}`);
+        parts.push(`box ${getComputedStyle(box).display}`);
+      }
+      document.getElementById('status').textContent = parts.join(' | ');
+    }, 200);
+  </script>
+</body>
+</html>

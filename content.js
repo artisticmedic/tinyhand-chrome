@@ -122,6 +122,14 @@ function scannedShadowRoot(el) {
 }
 
 const HIDE_CSS = ':root, :root * { cursor: none !important; }';
+// :is() carries its weightiest argument, so this beats a component's own !important.
+const SHADOW_CSS = ':is(*, #tinyhand#tinyhand#tinyhand) { cursor: none !important; }';
+let realCursor = false;
+
+function hideCursor() {
+  setStyles(realCursor ? null : HIDE_CSS);
+  shadowSheet.replaceSync(realCursor ? '' : SHADOW_CSS);
+}
 
 const shadowSheet = new CSSStyleSheet();
 let shadowRoots = new WeakSet();
@@ -658,13 +666,13 @@ function route(type, x, y, buttons = 0, arrow = false) {
   else if (type === 'ink-end') endInk(arrow);
   else if (type === 'clear') clearInk();
   else if (type === 'down') pressAt(x, y);
-  else if (type === 'up') { pointAt(x, y); endInk(false); releaseHand(); }
+  else if (type === 'up') { pointAt(x, y); endInk(arrow); releaseHand(); }
   else if (type === 'leave') leaveSoon();
   else if (type === 'release') releaseHand();
   else if (type === 'slap') startSlap(x, y);
   else {
     pointAt(x, y);
-    if (buttons & 1) extendInk(x, y, false);
+    if (buttons & 1) extendInk(x, y, arrow);
     else releaseHand();
   }
 }
@@ -679,7 +687,12 @@ function sayHello() {
 
 function sendToParent(packet) {
   chrome.runtime.sendMessage({ action: 'toParent', id: ownFrameId, packet }).then(
-    (reply) => { if (reply?.unknown) sayHello(); },
+    (reply) => {
+      if (reply?.unknown) sayHello();
+      if (Boolean(reply?.unsupported) === realCursor) return;
+      realCursor = !realCursor;
+      if (settings) hideCursor();
+    },
     () => {}
   );
 }
@@ -699,6 +712,17 @@ function frameElementFor(source) {
   return null;
 }
 
+function isAxisAligned(frame) {
+  for (let el = frame; el instanceof Element; el = el.parentElement || el.getRootNode().host) {
+    const style = getComputedStyle(el);
+    if (style.rotate !== 'none' || style.scale.includes('-')) return false;
+    if (style.transform === 'none') continue;
+    const m = new DOMMatrixReadOnly(style.transform);
+    if (!m.is2D || m.b || m.c || m.a < 0 || m.d < 0) return false;
+  }
+  return true;
+}
+
 function framePoint(frame, x, y) {
   const rect = frame.getBoundingClientRect();
   const style = getComputedStyle(frame);
@@ -716,11 +740,16 @@ window.addEventListener('message', (event) => {
   if (!frame) return;
   const known = childFrames.get(id);
   if (known && known !== frame && known.isConnected) return;
+  let replaces = null;
+  for (const [other, el] of childFrames) {
+    if (el === frame && other !== id) replaces = other;
+  }
+  childFrames.delete(replaces);
   childFrames.set(id, frame);
-  chrome.runtime.sendMessage({ action: 'claimFrame', id }).catch(() => {});
+  chrome.runtime.sendMessage({ action: 'claimFrame', id, replaces }).catch(() => {});
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'unslap') unslap();
   if (message.action !== 'fromChild' || !settings) return;
   const frame = childFrames.get(message.id);
@@ -729,6 +758,11 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
   const { type, x, y, buttons, arrow } = message.packet;
+  if (!isAxisAligned(frame)) {
+    route('leave', 0, 0);
+    sendResponse({ unsupported: true });
+    return;
+  }
   const [px, py] = framePoint(frame, x, y);
   route(type, px, py, buttons, arrow);
 });
@@ -757,19 +791,22 @@ window.addEventListener('pointermove', (event) => {
       return;
     }
   }
-  route('move', x, y, event.buttons);
+  route('move', x, y, event.buttons, wantsArrow(event));
 }, true);
 
 window.addEventListener('pointerdown', (event) => {
   if (!isTracked(event)) return;
   const { clientX: x, clientY: y } = event;
+  if (gesture) endGesture(x, y, false);
+  clearTimeout(mutedTimer);
+  muted = null;
   if (event.button === 0 && event.altKey && settings.slap) {
     swallow(event);
     mute(['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']);
     slapAt(x, y);
     return;
   }
-  if (event.button === 0 && event.shiftKey && settings.draw && !isEditable(event.composedPath()[0])) {
+  if (event.button === 0 && event.shiftKey && settings.draw && !isEditable(event)) {
     swallow(event);
     mute(['mousedown']);
     gesture = { x, y, drawing: false };
@@ -789,26 +826,25 @@ function endGesture(x, y, arrow) {
 }
 
 window.addEventListener('pointerup', (event) => {
+  if (!isTracked(event)) return;
   if (muted) unmuteSoon();
   if (gesture) endGesture(event.clientX, event.clientY, wantsArrow(event));
   if (muted?.has('mouseup')) swallow(event);
-  if (!isTracked(event)) return;
-  route('up', event.clientX, event.clientY, event.buttons);
+  route('up', event.clientX, event.clientY, event.buttons, wantsArrow(event));
 }, true);
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && settings && event.isTrusted) route('clear', 0, 0);
 }, true);
 
-window.addEventListener('pointercancel', () => {
+window.addEventListener('pointercancel', (event) => {
+  if (!isTracked(event)) return;
   clearTimeout(mutedTimer);
   muted = null;
-  if (!settings) return;
   if (gesture?.drawing) route('ink-end', 0, 0);
   gesture = null;
   route('release', 0, 0);
 }, true);
-window.addEventListener('blur', () => IS_TOP && releaseHand());
 
 document.addEventListener('pointerout', (event) => {
   if (!settings || event.relatedTarget) return;
@@ -847,7 +883,12 @@ function swallow(event) {
 function mute(types) {
   clearTimeout(mutedTimer);
   muted = new Set([...(muted || []), ...types]);
-  mutedTimer = setTimeout(() => { muted = null; }, 5000);
+  mutedTimer = setTimeout(expireMute, 5000);
+}
+
+function expireMute() {
+  if (gesture) mutedTimer = setTimeout(expireMute, 5000);
+  else muted = null;
 }
 
 function unmuteSoon() {
@@ -863,14 +904,18 @@ for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
   }, true);
 }
 
-function deepElementFromPoint(x, y) {
-  let el = document.elementFromPoint(x, y);
-  for (let depth = 0; el && depth < 32; depth++) {
-    const inner = scannedShadowRoot(el)?.elementFromPoint(x, y);
-    if (!inner || inner === el) break;
-    el = inner;
+function deepest(el, inner) {
+  for (let depth = 0; el instanceof HTMLElement && depth < 32; depth++) {
+    const root = openOrClosedShadowRoot(el);
+    const next = root && inner(root);
+    if (!next || !root.contains(next)) break;
+    el = next;
   }
   return el;
+}
+
+function deepElementFromPoint(x, y) {
+  return deepest(document.elementFromPoint(x, y), (root) => root.elementFromPoint(x, y));
 }
 
 const SECTION_TAGS = new Set(['SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'FIGURE', 'LI', 'TR', 'TABLE', 'FORM', 'BUTTON', 'IMG', 'VIDEO', 'CANVAS', 'svg', 'IFRAME', 'PICTURE', 'DIALOG']);
@@ -973,14 +1018,18 @@ function unslap() {
   return true;
 }
 
-function isEditable(target) {
+function isEditable(event) {
+  const inner = event.type === 'keydown'
+    ? (root) => root.activeElement
+    : (root) => root.elementFromPoint(event.clientX, event.clientY);
+  const target = deepest(event.composedPath()[0], inner);
   return target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || '');
 }
 
 window.addEventListener('keydown', (event) => {
   if (!settings?.slap || !event.isTrusted) return;
   if (event.key === 'Alt' && lastPointer) highlight(slapTarget(lastPointer.x, lastPointer.y));
-  if (!event.altKey || event.code !== 'KeyZ' || isEditable(event.composedPath()[0])) return;
+  if (!event.altKey || event.code !== 'KeyZ' || isEditable(event)) return;
   swallow(event);
   if (IS_EXTENSION_PAGE) unslap();
   else chrome.runtime.sendMessage({ action: 'unslap' }).catch(() => {});
@@ -992,7 +1041,9 @@ window.addEventListener('keyup', (event) => {
 
 window.addEventListener('blur', () => {
   unhighlight();
-  if (muted) unmuteSoon();
+  if (IS_TOP) releaseHand();
+  if (gesture) endGesture(lastPointer?.x ?? 0, lastPointer?.y ?? 0, false);
+  else if (muted) unmuteSoon();
 });
 
 function topHostname() {
@@ -1038,9 +1089,7 @@ async function apply() {
   };
   if (!settings.slap) unhighlight();
 
-  setStyles(HIDE_CSS);
-  // :is() carries its weightiest argument, so this beats a component's own !important.
-  shadowSheet.replaceSync(':is(*, #tinyhand#tinyhand#tinyhand) { cursor: none !important; }');
+  hideCursor();
   watchShadowRoots();
   sayHello();
 
@@ -1055,8 +1104,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 document.addEventListener(INSTANCE_EVENT, () => {
-  if (chrome.runtime?.id) document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
-  else standDown();
+  if (chrome.runtime?.id) {
+    document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
+    return;
+  }
+  for (const entry of slapped.splice(0)) {
+    clearTimeout(entry.timer);
+    entry.animation?.cancel();
+    restoreProp(entry.el, 'display', entry.display);
+  }
+  standDown();
 });
 
 apply();

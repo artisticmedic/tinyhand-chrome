@@ -37,35 +37,46 @@ const restored = chrome.storage.session.get({ parentFrames: {}, slapHistory: {} 
 });
 const persist = () => chrome.storage.session.set({ parentFrames, slapHistory });
 
+const MAX_FRAMES_PER_TAB = 128;
+const MAX_SLAPS_PER_TAB = 100;
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   await restored;
-  for (const key of Object.keys(parentFrames)) {
-    if (key.startsWith(`${tabId}:`)) delete parentFrames[key];
-  }
+  delete parentFrames[tabId];
   delete slapHistory[tabId];
   persist();
 });
 
-function handle(message, sender) {
+function claimFrame({ id, replaces }, tabId, frameId) {
+  const frames = (parentFrames[tabId] ??= {});
+  if (frames[replaces] === frameId) delete frames[replaces];
+  if (!(id in frames)) {
+    const ids = Object.keys(frames);
+    if (ids.length >= MAX_FRAMES_PER_TAB) delete frames[ids[0]];
+    frames[id] = frameId;
+  }
+  persist();
+}
+
+async function handle(message, sender) {
   const tabId = sender.tab.id;
-  const key = `${tabId}:${message.id}`;
   if (message.action === 'setCursorCss') {
     setCursorCss(message, sender);
   } else if (message.action === 'claimFrame') {
-    if (!(key in parentFrames)) {
-      parentFrames[key] = sender.frameId;
-      persist();
-    }
+    claimFrame(message, tabId, sender.frameId);
   } else if (message.action === 'toParent') {
-    if (!(key in parentFrames)) return { unknown: true };
-    chrome.tabs.sendMessage(tabId, { action: 'fromChild', id: message.id, packet: message.packet }, { frameId: parentFrames[key] })
-      .catch(() => {});
+    const frameId = parentFrames[tabId]?.[message.id];
+    if (frameId === undefined) return { unknown: true };
+    const reply = await chrome.tabs.sendMessage(tabId, { action: 'fromChild', id: message.id, packet: message.packet }, { frameId })
+      .catch(() => null);
+    return reply ?? {};
   } else if (message.action === 'slapped') {
-    (slapHistory[tabId] ??= []).push(sender.frameId);
+    const history = (slapHistory[tabId] ??= []);
+    history.push(sender.frameId);
+    if (history.length > MAX_SLAPS_PER_TAB) history.shift();
     persist();
   } else if (message.action === 'unslap') {
-    const frameId = slapHistory[tabId]?.pop();
-    if (frameId === undefined) return {};
+    const frameId = slapHistory[tabId]?.pop() ?? sender.frameId;
     persist();
     chrome.tabs.sendMessage(tabId, { action: 'unslap' }, { frameId }).catch(() => {});
   }
@@ -74,7 +85,7 @@ function handle(message, sender) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!sender.tab) return false;
-  restored.then(() => sendResponse(handle(message, sender)));
+  restored.then(() => handle(message, sender)).then(sendResponse);
   return true;
 });
 
