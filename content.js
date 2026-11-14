@@ -33,7 +33,7 @@ const SLAP_END_MS = 430;
 const SLAP_IMPACT_MS = 165;
 const SLAP_WIND = 0.38;
 const SLAP_FOLLOW = 0.1;
-const IMPACT_MS = 360;
+const IMPACT_MS = 300;
 
 const INK_START_PX = 4;
 const INK_STEP_PX = 1.5;
@@ -583,117 +583,33 @@ function slapPose(now) {
   return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: back, active: true };
 }
 
-function createImpact(x, y, start) {
-  let seed = (Math.random() * 0x100000000) >>> 0;
-  const random = () => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 0x100000000;
-  };
-  const points = Array.from({ length: 18 }, (_, i) => {
-    const angle = -Math.PI / 2 + i * Math.PI / 9 + (random() - 0.5) * 0.12;
-    const radius = i % 2 ? 0.46 + random() * 0.16 : 0.9 + random() * 0.3;
-    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-  });
-  const burst = new Path2D();
-  burst.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i <= points.length; i++) {
-    const a = points[i - 1];
-    const b = points[i % points.length];
-    const bend = (random() - 0.5) * 0.09;
-    burst.quadraticCurveTo((a.x + b.x) / 2 + bend, (a.y + b.y) / 2 - bend, b.x, b.y);
-  }
-  burst.closePath();
-  const whoosh = new Path2D();
-  for (let i = 0; i < 2; i++) {
-    const offset = i * 0.3 + random() * 0.08;
-    whoosh.moveTo(0.4 + offset, -1.25 - offset);
-    whoosh.bezierCurveTo(1.05 + offset, -1.65 - offset, 1.6 + offset, -1.1 - offset, 1.5 + offset, -0.55 - offset);
-  }
-  const flecks = Array.from({ length: 5 }, (_, i) => ({
-    angle: -Math.PI + i * Math.PI * 0.46 + (random() - 0.5) * 0.3,
-    distance: 0.45 + random() * 0.65,
-    length: 0.12 + random() * 0.12,
-    spin: (random() - 0.5) * 2.5,
-    delay: random() * 25,
-  }));
-  return { x, y, start, burst, whoosh, flecks, rotation: (random() - 0.5) * 0.3, size: screenHeight() * sizeFraction() * 0.4 };
-}
-
-function strokeImpact(ctx, path, width) {
-  ctx.strokeStyle = '#fffaf3';
-  ctx.lineWidth = width + 0.075;
-  ctx.stroke(path);
-  ctx.strokeStyle = '#8754f2';
-  ctx.lineWidth = width;
-  ctx.stroke(path);
-}
-
 function drawImpact(now) {
   const impact = overlay.impact;
   if (!impact) return false;
   const t = now - impact.start;
   if (t < 0) return true;
-  const reduced = reducedMotion?.matches;
-  const duration = reduced ? 150 : IMPACT_MS;
-  if (t >= duration) {
+  if (t >= IMPACT_MS) {
     overlay.impact = null;
     return false;
   }
-  const { inkCtx: ctx } = overlay;
+  const k = easeOut(t / IMPACT_MS);
+  const { ctx } = overlay;
+  const r = 10 + 46 * k;
   ctx.save();
-  ctx.translate(impact.x, impact.y);
-  ctx.rotate(impact.rotation);
-  ctx.scale(impact.size, impact.size);
+  ctx.globalAlpha = 1 - k;
+  ctx.strokeStyle = '#8754f2';
   ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
-  if (t < (reduced ? duration : 260)) {
-    const punch = reduced ? 0.72 : t < 55
-      ? 0.72 + 0.4 * easeOut(t / 55)
-      : 1.12 - 0.1 * easeOut(Math.min(1, (t - 55) / 140));
-    ctx.save();
-    ctx.scale(punch, punch);
-    ctx.globalAlpha = reduced ? 1 - easeIn(t / duration) : 1 - easeIn(Math.max(0, (t - 65) / 195));
-    ctx.fillStyle = 'rgba(255, 250, 243, 0.88)';
-    ctx.fill(impact.burst);
-    strokeImpact(ctx, impact.burst, 0.075);
-    ctx.restore();
-  }
-
-  if (!reduced) {
-    if (t < 180) {
-      ctx.save();
-      const sweep = easeOut(t / 180);
-      ctx.translate(-0.12 * sweep, 0.08 * sweep);
-      ctx.globalAlpha = 0.9 * (1 - easeIn(t / 180));
-      strokeImpact(ctx, impact.whoosh, 0.055);
-      ctx.restore();
-    }
-    for (let i = 0; i < impact.flecks.length; i++) {
-      const fleck = impact.flecks[i];
-      const age = (t - fleck.delay) / (IMPACT_MS - fleck.delay);
-      if (age < 0) continue;
-      const travel = easeOut(age);
-      const radius = 1.1 + fleck.distance * travel;
-      ctx.save();
-      ctx.translate(Math.cos(fleck.angle) * radius, Math.sin(fleck.angle) * radius + 0.2 * age * age);
-      ctx.rotate(fleck.angle + fleck.spin * travel);
-      ctx.globalAlpha = Math.min(1, age * 12) * (1 - easeIn(age));
-      const path = new Path2D();
-      const length = fleck.length * (1 - 0.35 * age);
-      if (i % 2) {
-        path.moveTo(-length, 0);
-        path.quadraticCurveTo(0, -length * 0.35, length, 0);
-      } else {
-        path.moveTo(-length, 0);
-        path.lineTo(0, -length * 0.6);
-        path.lineTo(length, 0);
-        path.lineTo(0, length * 0.6);
-        path.closePath();
-      }
-      strokeImpact(ctx, path, 0.055);
-      ctx.restore();
-    }
+  ctx.lineWidth = 4 * (1 - k) + 1;
+  ctx.beginPath();
+  ctx.arc(impact.x, impact.y, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI * 0.95 + (i / 6) * Math.PI * 1.1;
+    ctx.beginPath();
+    ctx.moveTo(impact.x + Math.cos(a) * (r + 6), impact.y + Math.sin(a) * (r + 6));
+    ctx.lineTo(impact.x + Math.cos(a) * (r + 18 + 10 * k), impact.y + Math.sin(a) * (r + 18 + 10 * k));
+    ctx.stroke();
   }
   ctx.restore();
   return true;
@@ -734,7 +650,7 @@ function startSlap(x, y) {
   pointAt(x, y);
   const now = performance.now();
   overlay.slap = { start: now };
-  overlay.impact = createImpact(x, y, now + SLAP_IMPACT_MS);
+  overlay.impact = { x, y, start: now + SLAP_IMPACT_MS };
   schedule();
 }
 
