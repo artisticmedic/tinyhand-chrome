@@ -945,6 +945,9 @@ function looksLikeBox(el, style) {
 function slapTarget(x, y) {
   const viewArea = window.innerWidth * window.innerHeight;
   let el = deepElementFromPoint(x, y);
+  for (let up = el; up; up = parentOf(up)) {
+    if (slapped.some((entry) => entry.el === up)) el = parentOf(up);
+  }
   let fallback = null;
   while (el && el !== document.documentElement && el !== document.body) {
     if (el.style && el !== overlay.host) {
@@ -957,9 +960,13 @@ function slapTarget(x, y) {
         if (looksLikeBox(el, style)) return el;
       }
     }
-    el = el.parentElement || el.getRootNode()?.host || null;
+    el = parentOf(el);
   }
   return fallback;
+}
+
+function parentOf(el) {
+  return el.parentElement || el.getRootNode()?.host || null;
 }
 
 function saveProp(el, prop) {
@@ -994,7 +1001,8 @@ function slapAt(x, y) {
   route('slap', x, y, 0);
   if (settings.sound) playSlap(SLAP_IMPACT_MS / 1000);
   if (!el) return;
-  const entry = { el, display: saveProp(el, 'display'), timer: 0, animation: null };
+  const entry = { el, display: saveProp(el, 'display'), pointerEvents: saveProp(el, 'pointer-events'), timer: 0, animation: null };
+  el.style.setProperty('pointer-events', 'none', 'important');
   slapped.push(entry);
   if (!IS_EXTENSION_PAGE) send({ action: 'slapped' });
   entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
@@ -1021,12 +1029,17 @@ function knockOff(entry) {
   animation.finished.then(hide, hide);
 }
 
+function putBack(entry) {
+  clearTimeout(entry.timer);
+  entry.animation?.cancel();
+  restoreProp(entry.el, 'display', entry.display);
+  restoreProp(entry.el, 'pointer-events', entry.pointerEvents);
+}
+
 function unslap() {
   const last = slapped.pop();
   if (!last) return false;
-  clearTimeout(last.timer);
-  last.animation?.cancel();
-  restoreProp(last.el, 'display', last.display);
+  putBack(last);
   last.el.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
   return true;
 }
@@ -1119,11 +1132,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 function retire() {
-  for (const entry of slapped.splice(0)) {
-    clearTimeout(entry.timer);
-    entry.animation?.cancel();
-    restoreProp(entry.el, 'display', entry.display);
-  }
+  for (const entry of slapped.splice(0)) putBack(entry);
   standDown();
 }
 
