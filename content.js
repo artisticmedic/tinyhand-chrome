@@ -12,6 +12,7 @@ const IS_TOP = window === window.top;
 const IS_EXTENSION_PAGE = location.protocol === 'chrome-extension:';
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const IS_MAC = /Mac/.test(navigator.platform);
+const randomHex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 const wantsArrow = (event) => (IS_MAC ? event.metaKey : event.ctrlKey);
 
 // Extension pages' CSP doesn't treat use_dynamic_url's addresses as 'self'.
@@ -107,13 +108,22 @@ function setStyles(css) {
     if (!pageStyle.isConnected) document.documentElement.append(pageStyle);
     return;
   }
-  chrome.runtime.sendMessage({ action: 'setCursorCss', css, previous });
+  send({ action: 'setCursorCss', css, previous });
+}
+
+function send(message) {
+  if (chrome.runtime?.id) return chrome.runtime.sendMessage(message).catch(() => null);
+  retire();
+  return Promise.resolve(null);
 }
 
 let pageStyle = null;
 
 function openOrClosedShadowRoot(el) {
-  return el.shadowRoot || chrome.dom?.openOrClosedShadowRoot(el) || null;
+  if (el.shadowRoot) return el.shadowRoot;
+  if (chrome.runtime?.id) return chrome.dom?.openOrClosedShadowRoot(el) ?? null;
+  retire();
+  return null;
 }
 
 function scannedShadowRoot(el) {
@@ -121,14 +131,18 @@ function scannedShadowRoot(el) {
   return el.shadowRoot;
 }
 
-const HIDE_CSS = ':root, :root * { cursor: none !important; }';
+const CURSOR_ATTR = `data-tinyhand-${randomHex(4)}`;
+const HIDE_CSS = `:root[${CURSOR_ATTR}], :root[${CURSOR_ATTR}] * { cursor: none !important; }`;
 // :is() carries its weightiest argument, so this beats a component's own !important.
 const SHADOW_CSS = ':is(*, #tinyhand#tinyhand#tinyhand) { cursor: none !important; }';
 let realCursor = false;
+let cursorHidden = false;
 
 function hideCursor() {
-  setStyles(realCursor ? null : HIDE_CSS);
-  shadowSheet.replaceSync(realCursor ? '' : SHADOW_CSS);
+  cursorHidden = !realCursor;
+  document.documentElement?.toggleAttribute(CURSOR_ATTR, cursorHidden);
+  setStyles(cursorHidden ? HIDE_CSS : null);
+  shadowSheet.replaceSync(cursorHidden ? SHADOW_CSS : '');
 }
 
 const shadowSheet = new CSSStyleSheet();
@@ -137,6 +151,7 @@ let shadowRootRefs = new Set();
 let watchingShadowRoots = false;
 
 const shadowObserver = new MutationObserver((records) => {
+  if (cursorHidden && document.documentElement?.hasAttribute(CURSOR_ATTR) === false) document.documentElement.setAttribute(CURSOR_ATTR, '');
   const seen = new Set();
   for (const record of records) {
     for (const node of record.addedNodes) {
@@ -179,7 +194,7 @@ function stopWatchingShadowRoots() {
 function watchShadowRoots() {
   if (watchingShadowRoots) return;
   watchingShadowRoots = true;
-  shadowObserver.observe(document, { childList: true, subtree: true });
+  shadowObserver.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: [CURSOR_ATTR] });
   findShadowRoots(document);
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => findShadowRoots(document), { once: true });
@@ -678,7 +693,7 @@ function route(type, x, y, buttons = 0, arrow = false) {
 }
 
 const HELLO_KEY = '__tinyhandFrame';
-const ownFrameId = IS_TOP ? null : [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const ownFrameId = IS_TOP ? null : randomHex(12);
 const childFrames = new Map();
 
 function sayHello() {
@@ -686,15 +701,12 @@ function sayHello() {
 }
 
 function sendToParent(packet) {
-  chrome.runtime.sendMessage({ action: 'toParent', id: ownFrameId, packet }).then(
-    (reply) => {
-      if (reply?.unknown) sayHello();
-      if (Boolean(reply?.unsupported) === realCursor) return;
-      realCursor = !realCursor;
-      if (settings) hideCursor();
-    },
-    () => {}
-  );
+  send({ action: 'toParent', id: ownFrameId, packet }).then((reply) => {
+    if (reply?.unknown) sayHello();
+    if (Boolean(reply?.unsupported) === realCursor) return;
+    realCursor = !realCursor;
+    if (settings) hideCursor();
+  });
 }
 
 function frameElementFor(source) {
@@ -746,7 +758,7 @@ window.addEventListener('message', (event) => {
   }
   childFrames.delete(replaces);
   childFrames.set(id, frame);
-  chrome.runtime.sendMessage({ action: 'claimFrame', id, replaces }).catch(() => {});
+  send({ action: 'claimFrame', id, replaces });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -768,6 +780,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function isTracked(event) {
+  if (settings && !chrome.runtime?.id) retire();
   return settings && event.isTrusted && event.pointerType !== 'touch';
 }
 
@@ -983,7 +996,7 @@ function slapAt(x, y) {
   if (!el) return;
   const entry = { el, display: saveProp(el, 'display'), timer: 0, animation: null };
   slapped.push(entry);
-  if (!IS_EXTENSION_PAGE) chrome.runtime.sendMessage({ action: 'slapped' }).catch(() => {});
+  if (!IS_EXTENSION_PAGE) send({ action: 'slapped' });
   entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
 }
 
@@ -1032,7 +1045,7 @@ window.addEventListener('keydown', (event) => {
   if (!event.altKey || event.code !== 'KeyZ' || isEditable(event)) return;
   swallow(event);
   if (IS_EXTENSION_PAGE) unslap();
-  else chrome.runtime.sendMessage({ action: 'unslap' }).catch(() => {});
+  else send({ action: 'unslap' });
 }, true);
 
 window.addEventListener('keyup', (event) => {
@@ -1054,6 +1067,8 @@ function topHostname() {
 
 function standDown() {
   settings = null;
+  cursorHidden = false;
+  document.documentElement?.removeAttribute(CURSOR_ATTR);
   unhighlight();
   gesture = null;
   clearTimeout(mutedTimer);
@@ -1103,17 +1118,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') apply();
 });
 
-document.addEventListener(INSTANCE_EVENT, () => {
-  if (chrome.runtime?.id) {
-    document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
-    return;
-  }
+function retire() {
   for (const entry of slapped.splice(0)) {
     clearTimeout(entry.timer);
     entry.animation?.cancel();
     restoreProp(entry.el, 'display', entry.display);
   }
   standDown();
+}
+
+document.addEventListener(INSTANCE_EVENT, () => {
+  if (chrome.runtime?.id) document.dispatchEvent(new CustomEvent(ALIVE_EVENT));
+  else retire();
 });
 
 apply();
