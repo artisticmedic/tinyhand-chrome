@@ -53,33 +53,49 @@ function samePose(actual, expected) {
   for (const key of ['swing', 'scale', 'press']) near(actual[key], expected[key]);
 }
 
-test('a slap holds the wind-up, hits at 210 ms, overshoots once and settles', () => {
+test('a slap winds up, hits at 175 ms, holds contact, recoils once and settles', () => {
   const h = hand();
   h.click(0);
   samePose(h.pose(0), { swing: 0, scale: 1, press: 0 });
-  assert.ok(h.pose(65).swing > 0.5);
-  const peak = { swing: 0.64, scale: 1.18, press: 0 };
-  samePose(h.pose(130), peak);
-  samePose(h.pose(165), peak);
-  let previous = peak.swing;
-  for (let time = 166; time <= 240; time++) {
+  let previous = 0;
+  for (let time = 1; time <= 125; time++) {
+    const pose = h.pose(time);
+    assert.ok(pose.swing > previous && pose.swing <= 0.7);
+    previous = pose.swing;
+  }
+  samePose(h.pose(125), { swing: 0.7, scale: 1.18, press: 0 });
+  for (let time = 126; time <= 175; time++) {
     const pose = h.pose(time);
     assert.ok(pose.swing < previous);
     previous = pose.swing;
-    if (time < 210) assert.equal(h.overlay.impact, null);
-    if (time === 210) {
-      samePose(pose, { swing: 0, scale: 0.94, press: 1 });
-      assert.equal(h.overlay.impact.start, 210);
-    }
+    if (time < 175) assert.equal(h.overlay.impact, null);
   }
-  samePose(h.pose(240), { swing: -0.1, scale: 0.92, press: 0.8 });
-  for (let time = 241; time <= 400; time++) {
+  assert.equal(h.overlay.impact.start, 175);
+  for (let time = 175; time <= 199; time++) samePose(h.pose(time), { swing: 0, scale: 0.94, press: 1 });
+  previous = 0;
+  for (let time = 200; time <= 244; time++) {
     const pose = h.pose(time);
-    assert.ok(pose.swing > previous && pose.swing <= 0);
+    assert.ok(pose.swing < previous);
     previous = pose.swing;
   }
-  assert.deepEqual(h.pose(400), { swing: 0, scale: 1, press: 0, active: false });
+  near(h.pose(244).swing, -0.07);
+  for (let time = 245; time < 469; time++) {
+    const pose = h.pose(time);
+    assert.ok(pose.swing > previous && pose.swing < 0);
+    previous = pose.swing;
+  }
+  assert.deepEqual(h.pose(469), { swing: 0, scale: 1, press: 0, active: false });
   assert.equal(h.overlay.slaps.length, 0);
+});
+
+test('a second click 50 ms later winds up only 30% as far and keeps its hit time', () => {
+  const h = hand();
+  h.click(0);
+  h.click(50);
+  const reach = Math.max(...Array.from({ length: 26 }, (_, i) => h.pose(199 + i).swing));
+  assert.ok(reach > 0.2 && reach <= 0.7 * 0.3, String(reach));
+  samePose(h.pose(225), { swing: 0, scale: 0.94, press: 1 });
+  assert.equal(h.overlay.impact.start, 225);
 });
 
 for (const reduced of [false, true]) {
@@ -87,7 +103,7 @@ for (const reduced of [false, true]) {
     const h = hand({ reduced });
     const hits = [];
     let impact;
-    for (let time = 0; time <= 1800; time++) {
+    for (let time = 0; time <= 1900; time++) {
       const before = h.pose(time);
       if (time <= 1350 && time % 150 === 0) h.click(time);
       const pose = h.pose(time);
@@ -101,22 +117,22 @@ for (const reduced of [false, true]) {
         near(pose.press, reduced ? 0 : 1);
       }
     }
-    assert.deepEqual(hits, [210, 360, 510, 660, 810, 960, 1110, 1260, 1410, 1560]);
+    assert.deepEqual(hits, [175, 325, 475, 625, 775, 925, 1075, 1225, 1375, 1525]);
     assert.equal(h.overlay.slaps.length, 0);
   });
 }
 
 test('interruptions preserve the current pose and both hit deadlines in every phase', () => {
-  for (const time of [1, 70, 130, 150, 180, 209, 210, 225, 240, 300, 399]) {
+  for (const time of [1, 20, 70, 125, 150, 174, 175, 190, 199, 230, 300, 468]) {
     const h = hand();
     h.click(0);
     const before = h.pose(time);
     h.click(time);
     samePose(h.pose(time), before);
-    if (time < 210) near(h.pose(210).swing, 0);
-    assert.equal(h.overlay.impact.start, 210);
-    samePose(h.pose(time + 210), { swing: 0, scale: 0.94, press: 1 });
-    assert.equal(h.overlay.impact.start, time + 210);
+    if (time < 175) near(h.pose(175).swing, 0);
+    assert.equal(h.overlay.impact.start, 175);
+    samePose(h.pose(time + 175), { swing: 0, scale: 0.94, press: 1 });
+    assert.equal(h.overlay.impact.start, time + 175);
   }
 });
 
@@ -128,10 +144,10 @@ test('nested iframe relays preserve the originating click time across clock orig
   middle.relay(720, child.packets[0]);
   parent.relay(335, middle.packets[0]);
   assert.equal(middle.packets[0].time, 1700000000800);
-  parent.pose(509);
+  parent.pose(474);
   assert.equal(parent.overlay.impact, null);
-  samePose(parent.pose(510), { swing: 0, scale: 0.94, press: 1 });
-  assert.deepEqual({ ...parent.overlay.impact }, { x: 120, y: 240, start: 510 });
+  samePose(parent.pose(475), { swing: 0, scale: 0.94, press: 1 });
+  assert.deepEqual({ ...parent.overlay.impact }, { x: 120, y: 240, start: 475 });
 });
 
 test('a delayed iframe click can arrive after a later top-frame click without losing either hit', () => {
@@ -142,8 +158,8 @@ test('a delayed iframe click can arrive after a later top-frame click without lo
   const before = parent.pose(100);
   parent.relay(100, child.packets[0]);
   samePose(parent.pose(100), before);
-  samePose(parent.pose(210), { swing: 0, scale: 0.94, press: 1 });
-  assert.equal(parent.overlay.impact.start, 210);
-  samePose(parent.pose(260), { swing: 0, scale: 0.94, press: 1 });
-  assert.equal(parent.overlay.impact.start, 260);
+  samePose(parent.pose(175), { swing: 0, scale: 0.94, press: 1 });
+  assert.equal(parent.overlay.impact.start, 175);
+  samePose(parent.pose(225), { swing: 0, scale: 0.94, press: 1 });
+  assert.equal(parent.overlay.impact.start, 225);
 });

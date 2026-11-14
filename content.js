@@ -27,13 +27,13 @@ const LIFT = 0.06;
 const PRESS_SCALE = 0.06;
 const PRESS_DECAY_PER_MS = 0.011;
 
-const SLAP_WIND_MS = 130;
-const SLAP_HOLD_MS = 35;
-const SLAP_IMPACT_MS = 210;
-const SLAP_FOLLOW_MS = 30;
-const SLAP_END_MS = 400;
-const SLAP_WIND = 0.64;
-const SLAP_FOLLOW = 0.1;
+const SLAP_WIND_MS = 125;
+const SLAP_STRIKE_MS = 50;
+const SLAP_IMPACT_MS = SLAP_WIND_MS + SLAP_STRIKE_MS;
+const SLAP_CONTACT_MS = 24;
+const SLAP_RELEASE_MS = 270;
+const SLAP_WIND = 0.7;
+const SLAP_RECOIL = 0.07;
 const IMPACT_MS = 300;
 
 const INK_START_PX = 4;
@@ -559,6 +559,14 @@ function clearInk() {
 
 const easeOut = (k) => 1 - (1 - k) ** 3;
 const easeIn = (k) => k * k * k;
+const POSE_KEYS = ['swing', 'scale', 'press'];
+const STILL = { swing: 0, scale: 0, press: 0 };
+
+function hermite(p0, m0, p1, u) {
+  const u2 = u * u;
+  const u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * p0 + (u3 - 2 * u2 + u) * m0 + (3 * u2 - 2 * u3) * p1;
+}
 
 function slapPose(now) {
   const rest = { swing: 0, scale: 1, press: 0, active: false };
@@ -569,41 +577,45 @@ function slapPose(now) {
       slap.impact = null;
     }
     const next = overlay.slaps[1];
-    if ((next && now >= next.start) || now >= slap.hit + SLAP_END_MS - SLAP_IMPACT_MS) {
+    if ((next && now >= next.start) || now >= slap.hit + SLAP_CONTACT_MS + SLAP_RELEASE_MS) {
       overlay.slaps.shift();
       continue;
     }
-    return reducedMotion?.matches ? { ...rest, active: true } : slapPoseAt(slap, now);
+    return reducedMotion?.matches ? { ...rest, active: true } : { ...slapPoseAt(slap, now), active: true };
   }
   return rest;
 }
 
 function slapPoseAt(slap, now) {
-  const { start, hit, from } = slap;
+  const { start, hit, from, velocity } = slap;
   const span = hit - start;
-  const strike = Math.min(SLAP_IMPACT_MS - SLAP_WIND_MS - SLAP_HOLD_MS, span * 0.4);
-  const hold = Math.min(SLAP_HOLD_MS, span * 0.2);
-  const wind = hit - strike - hold;
-  if (now < wind) {
-    const k = easeOut((now - start) / (wind - start));
-    return {
-      swing: from.swing + (SLAP_WIND - from.swing) * k,
-      scale: from.scale + (1.18 - from.scale) * k,
-      press: from.press * (1 - k),
-      active: true,
-    };
+  const strike = Math.min(SLAP_STRIKE_MS, span * 0.4);
+  const wind = span - strike;
+  const reach = Math.max(0.3, Math.min(1, wind / (0.75 * SLAP_WIND_MS)));
+  const peak = { swing: SLAP_WIND * reach, scale: 1 + 0.18 * reach, press: 0 };
+  if (now < hit - strike) {
+    const u = Math.max(0, (now - start) / wind);
+    const pose = {};
+    for (const key of POSE_KEYS) pose[key] = hermite(from[key], 0.8 * (peak[key] - from[key]) + velocity[key] * wind, peak[key], u);
+    return pose;
   }
-  if (now < hit - strike) return { swing: SLAP_WIND, scale: 1.18, press: 0, active: true };
   if (now < hit) {
-    const k = easeIn((now - hit + strike) / strike);
-    return { swing: SLAP_WIND * (1 - k), scale: 1.18 - 0.24 * k, press: k, active: true };
+    const k = ((now - hit + strike) / strike) ** 2;
+    return { swing: peak.swing * (1 - k), scale: peak.scale + (0.94 - peak.scale) * k, press: k };
   }
-  if (now < hit + SLAP_FOLLOW_MS) {
-    const k = easeOut((now - hit) / SLAP_FOLLOW_MS);
-    return { swing: -SLAP_FOLLOW * k, scale: 0.94 - 0.02 * k, press: 1 - 0.2 * k, active: true };
-  }
-  const back = 1 - easeOut(Math.min(1, (now - hit - SLAP_FOLLOW_MS) / (SLAP_END_MS - SLAP_IMPACT_MS - SLAP_FOLLOW_MS)));
-  return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: 0.8 * back, active: true };
+  const r = now - hit - SLAP_CONTACT_MS;
+  if (r < 0) return { swing: 0, scale: 0.94, press: 1 };
+  return {
+    swing: -SLAP_RECOIL * (r / 45) * Math.exp(1 - r / 45),
+    scale: 1 - 0.06 * (1 + r / 50) * Math.exp(-r / 50),
+    press: (1 + r / 40) * Math.exp(-r / 40),
+  };
+}
+
+function slapVelocity(slap, now) {
+  const a = slapPoseAt(slap, now - 1);
+  const b = slapPoseAt(slap, now);
+  return { swing: b.swing - a.swing, scale: b.scale - a.scale, press: b.press - a.press };
 }
 
 function drawImpact(now) {
@@ -674,13 +686,14 @@ function startSlap(x, y, time) {
   const now = performance.now();
   const from = slapPose(now);
   const hit = time - performance.timeOrigin + SLAP_IMPACT_MS;
-  overlay.slaps.push({ start: now, hit, from, impact: { x, y, start: hit } });
+  overlay.slaps.push({ start: now, hit, from, velocity: STILL, impact: { x, y, start: hit } });
   overlay.slaps.sort((a, b) => a.hit - b.hit);
   for (let i = 1; i < overlay.slaps.length; i++) {
     const previous = overlay.slaps[i - 1];
     const next = overlay.slaps[i];
-    next.start = Math.max(now, previous.hit + Math.min(SLAP_FOLLOW_MS, (next.hit - previous.hit) / 3));
+    next.start = Math.max(now, Math.min(previous.hit + SLAP_CONTACT_MS, next.hit));
     next.from = slapPoseAt(previous, next.start);
+    next.velocity = slapVelocity(previous, next.start);
   }
   schedule();
 }
@@ -1048,7 +1061,7 @@ function knockOff(entry) {
     ? el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' })
     : el.animate([
       { transform: 'none', opacity: 1 },
-      { transform: `translate(${dx * 0.35}px, -30px) rotate(-10deg)`, opacity: 1, offset: 0.25 },
+      { opacity: 1, offset: 0.3 },
       { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, opacity: 0 },
     ], { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.4, 1)', fill: 'forwards' });
   entry.animation = animation;
