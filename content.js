@@ -27,11 +27,12 @@ const LIFT = 0.06;
 const PRESS_SCALE = 0.06;
 const PRESS_DECAY_PER_MS = 0.011;
 
-const SLAP_WIND_MS = 110;
-const SLAP_HIT_MS = 170;
-const SLAP_END_MS = 430;
-const SLAP_IMPACT_MS = 165;
-const SLAP_WIND = 0.38;
+const SLAP_WIND_MS = 130;
+const SLAP_HOLD_MS = 35;
+const SLAP_IMPACT_MS = 210;
+const SLAP_FOLLOW_MS = 30;
+const SLAP_END_MS = 400;
+const SLAP_WIND = 0.64;
 const SLAP_FOLLOW = 0.1;
 const IMPACT_MS = 300;
 
@@ -221,7 +222,7 @@ const overlay = {
   frame: 0,
   hideTimer: 0,
   filter: '',
-  slap: null,
+  slaps: [],
   impact: null,
 };
 
@@ -561,26 +562,48 @@ const easeIn = (k) => k * k * k;
 
 function slapPose(now) {
   const rest = { swing: 0, scale: 1, press: 0, active: false };
-  if (!overlay.slap) return rest;
-  if (reducedMotion?.matches) {
-    overlay.slap = null;
-    return rest;
+  while (overlay.slaps.length) {
+    const slap = overlay.slaps[0];
+    if (now >= slap.hit && slap.impact) {
+      overlay.impact = slap.impact;
+      slap.impact = null;
+    }
+    const next = overlay.slaps[1];
+    if ((next && now >= next.start) || now >= slap.hit + SLAP_END_MS - SLAP_IMPACT_MS) {
+      overlay.slaps.shift();
+      continue;
+    }
+    return reducedMotion?.matches ? { ...rest, active: true } : slapPoseAt(slap, now);
   }
-  const t = now - overlay.slap.start;
-  if (t >= SLAP_END_MS) {
-    overlay.slap = null;
-    return rest;
+  return rest;
+}
+
+function slapPoseAt(slap, now) {
+  const { start, hit, from } = slap;
+  const span = hit - start;
+  const strike = Math.min(SLAP_IMPACT_MS - SLAP_WIND_MS - SLAP_HOLD_MS, span * 0.4);
+  const hold = Math.min(SLAP_HOLD_MS, span * 0.2);
+  const wind = hit - strike - hold;
+  if (now < wind) {
+    const k = easeOut((now - start) / (wind - start));
+    return {
+      swing: from.swing + (SLAP_WIND - from.swing) * k,
+      scale: from.scale + (1.18 - from.scale) * k,
+      press: from.press * (1 - k),
+      active: true,
+    };
   }
-  if (t < SLAP_WIND_MS) {
-    const k = easeOut(t / SLAP_WIND_MS);
-    return { swing: SLAP_WIND * k, scale: 1 + 0.12 * k, press: 0, active: true };
+  if (now < hit - strike) return { swing: SLAP_WIND, scale: 1.18, press: 0, active: true };
+  if (now < hit) {
+    const k = easeIn((now - hit + strike) / strike);
+    return { swing: SLAP_WIND * (1 - k), scale: 1.18 - 0.24 * k, press: k, active: true };
   }
-  if (t < SLAP_HIT_MS) {
-    const k = easeIn((t - SLAP_WIND_MS) / (SLAP_HIT_MS - SLAP_WIND_MS));
-    return { swing: SLAP_WIND - (SLAP_WIND + SLAP_FOLLOW) * k, scale: 1.12 - 0.2 * k, press: k, active: true };
+  if (now < hit + SLAP_FOLLOW_MS) {
+    const k = easeOut((now - hit) / SLAP_FOLLOW_MS);
+    return { swing: -SLAP_FOLLOW * k, scale: 0.94 - 0.02 * k, press: 1 - 0.2 * k, active: true };
   }
-  const back = 1 - easeOut((t - SLAP_HIT_MS) / (SLAP_END_MS - SLAP_HIT_MS));
-  return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: back, active: true };
+  const back = 1 - easeOut(Math.min(1, (now - hit - SLAP_FOLLOW_MS) / (SLAP_END_MS - SLAP_IMPACT_MS - SLAP_FOLLOW_MS)));
+  return { swing: -SLAP_FOLLOW * back, scale: 1 - 0.08 * back, press: 0.8 * back, active: true };
 }
 
 function drawImpact(now) {
@@ -646,11 +669,19 @@ function pressAt(x, y) {
   schedule();
 }
 
-function startSlap(x, y) {
+function startSlap(x, y, time) {
   pointAt(x, y);
   const now = performance.now();
-  overlay.slap = { start: now };
-  overlay.impact = { x, y, start: now + SLAP_IMPACT_MS };
+  const from = slapPose(now);
+  const hit = time - performance.timeOrigin + SLAP_IMPACT_MS;
+  overlay.slaps.push({ start: now, hit, from, impact: { x, y, start: hit } });
+  overlay.slaps.sort((a, b) => a.hit - b.hit);
+  for (let i = 1; i < overlay.slaps.length; i++) {
+    const previous = overlay.slaps[i - 1];
+    const next = overlay.slaps[i];
+    next.start = Math.max(now, previous.hit + Math.min(SLAP_FOLLOW_MS, (next.hit - previous.hit) / 3));
+    next.from = slapPoseAt(previous, next.start);
+  }
   schedule();
 }
 
@@ -669,9 +700,9 @@ function leaveSoon() {
   }, 120);
 }
 
-function route(type, x, y, buttons = 0, arrow = false) {
+function route(type, x, y, buttons = 0, arrow = false, time = performance.timeOrigin + performance.now()) {
   if (!IS_TOP) {
-    sendToParent({ type, x, y, buttons, arrow });
+    sendToParent({ type, x, y, buttons, arrow, time });
     return;
   }
   if (type === 'ink-start' && !settings.draw) return;
@@ -684,7 +715,7 @@ function route(type, x, y, buttons = 0, arrow = false) {
   else if (type === 'up') { pointAt(x, y); endInk(arrow); releaseHand(); }
   else if (type === 'leave') leaveSoon();
   else if (type === 'release') releaseHand();
-  else if (type === 'slap') startSlap(x, y);
+  else if (type === 'slap') startSlap(x, y, time);
   else {
     pointAt(x, y);
     if (buttons & 1) extendInk(x, y, arrow);
@@ -769,14 +800,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     childFrames.delete(message.id);
     return;
   }
-  const { type, x, y, buttons, arrow } = message.packet;
+  const { type, x, y, buttons, arrow, time } = message.packet;
   if (!isAxisAligned(frame)) {
     route('leave', 0, 0);
     sendResponse({ unsupported: true });
     return;
   }
   const [px, py] = framePoint(frame, x, y);
-  route(type, px, py, buttons, arrow);
+  route(type, px, py, buttons, arrow, time);
 });
 
 function isTracked(event) {
