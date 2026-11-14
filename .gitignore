@@ -1,3 +1,7 @@
 out/
 dist/
 .DS_Store
+node_modules/
+STATE.md
+store/CREDIT-PLAN.md
+store/LISTING.md

@@ -1,10 +1,12 @@
 # TinyHand for Chrome
 
 A tiny hand on a stick that points at things on any website, for demos,
-screen shares and streams. It's a port of [TinyHand](https://tinyhand.app),
-the free Mac app by [Kamran Ahmed](https://kamran.fyi), to Chrome and other
-Chromium browsers. The hands, the tap sounds and the way the hand moves are
-his.
+screen shares and streams. It's an unofficial port of
+[TinyHand](https://tinyhand.app), the free Mac app by
+[Kamran Ahmed](https://kamran.fyi), to Chrome and other Chromium browsers. The
+hands, the tap sounds and the way the hand moves are his.
+
+![The glove hand on a stick, pointing at a bar in a chart](store/images/screenshot-1-point.png)
 
 - **Point.** 36 hands and a laser dot. The stick reaches up from below the
   window and swings as the pointer moves. Cursor glove is the default.
@@ -73,6 +75,11 @@ rewrite, from Purrsor. Serve it on two ports, the second for the cross-origin
 iframe, then run the checks. Each loads the extension in Playwright's Chrome
 for Testing and writes screenshots to `out/`.
 
+The checks need `playwright-core`, either installed in this folder
+(`npm install --no-save playwright-core`) or found through `PLAYWRIGHT_CORE`, and
+Chrome for Testing (`npx playwright install chromium`). `CHROMIUM` points them
+at another Chrome binary.
+
 ```sh
 python3 -m http.server 8741 --bind 127.0.0.1 -d test &
 python3 -m http.server 8742 --bind 127.0.0.1 -d test &
@@ -85,9 +92,7 @@ node tools/inject.mjs   # a second injected copy changes nothing; no pointer dat
 `EXT_DIR=path` runs them against another copy, such as the unzipped package.
 
 The store images come from `tools/store-shots.mjs` with `store/` served on
-port 8743. `store/LISTING.md` has the listing text and the privacy answers;
-`store/CREDIT-PLAN.md` has the plan for crediting Kamran and tagging him at
-launch.
+port 8743.
 
 ## License
 
