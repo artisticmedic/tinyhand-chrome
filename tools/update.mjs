@@ -63,10 +63,22 @@ await worker.evaluate(() => chrome.storage.local.set({ enabled: true }));
 await wait(500);
 await wiggle();
 check('hand back on', (await state()).cursor === 'none');
+await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 2 });
+await wait(200);
 
 await extensions.evaluate((extensionId) => chrome.management.setEnabled(extensionId, false), id);
 await wait(500);
 await page.bringToFront();
+await page.evaluate(() => {
+  window.undoKeys = 0;
+  addEventListener('keydown', (event) => { if (event.altKey && event.code === 'KeyZ') window.undoKeys++; });
+});
+await page.keyboard.down('Alt');
+const outlined = await page.evaluate(() => [...document.querySelectorAll('*')].some((el) => el.style.outline.includes('135, 84, 242')));
+await page.keyboard.press('KeyZ');
+await page.keyboard.up('Alt');
+const undoKeys = await page.evaluate(() => window.undoKeys);
+check('extension disabled, before any pointer move: ⌥ outlines nothing and the page gets its own ⌥Z', !outlined && undoKeys === 1, `outlined ${outlined}, page ⌥Z presses ${undoKeys}`);
 await wiggle();
 const disabled = await state();
 check('extension disabled: the hand is gone and the real cursor is back in page and frame', disabled.overlays === 0 && disabled.cursor !== 'none' && disabled.frameCursor !== 'none', JSON.stringify(disabled));

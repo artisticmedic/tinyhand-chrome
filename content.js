@@ -645,7 +645,7 @@ function startSlap(x, y, time) {
   const now = performance.now();
   const from = slapPose(now);
   const velocity = overlay.slaps.length ? slapVelocity(overlay.slaps[0], now) : NO_VELOCITY;
-  const hit = Math.max(now + SLAP_STRIKE_MS, time - performance.timeOrigin + SLAP_IMPACT_MS);
+  const hit = Math.min(now + SLAP_IMPACT_MS, Math.max(now + SLAP_STRIKE_MS, time - performance.timeOrigin + SLAP_IMPACT_MS));
   overlay.slaps.push({ start: now, hit, from, velocity });
   overlay.slaps.sort((a, b) => a.hit - b.hit);
   for (let i = 1; i < overlay.slaps.length; i++) {
@@ -706,8 +706,9 @@ function sayHello() {
 
 function sendToParent(packet) {
   send({ action: 'toParent', id: ownFrameId, packet }).then((reply) => {
-    if (reply?.unknown) sayHello();
-    if (Boolean(reply?.unsupported) === realCursor) return;
+    if (!reply) return;
+    if (reply.unknown) sayHello();
+    if (Boolean(reply.unsupported) === realCursor) return;
     realCursor = !realCursor;
     if (settings) hideCursor();
   });
@@ -784,8 +785,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function isTracked(event) {
+  return liveSettings() && event.isTrusted && event.pointerType !== 'touch';
+}
+
+function liveSettings() {
   if (settings && !chrome.runtime?.id) retire();
-  return settings && event.isTrusted && event.pointerType !== 'touch';
+  return settings;
 }
 
 let gesture = null;
@@ -931,10 +936,6 @@ function deepest(el, inner) {
   return el;
 }
 
-function deepElementFromPoint(x, y) {
-  return deepest(document.elementFromPoint(x, y), (root) => root.elementFromPoint(x, y));
-}
-
 const SECTION_TAGS = new Set(['SECTION', 'ARTICLE', 'ASIDE', 'NAV', 'HEADER', 'FOOTER', 'FIGURE', 'LI', 'TR', 'TABLE', 'FORM', 'BUTTON', 'IMG', 'VIDEO', 'CANVAS', 'svg', 'IFRAME', 'PICTURE', 'DIALOG']);
 
 function looksLikeBox(el, style) {
@@ -948,10 +949,9 @@ function looksLikeBox(el, style) {
 
 function slapTarget(x, y) {
   const viewArea = window.innerWidth * window.innerHeight;
-  let el = deepElementFromPoint(x, y);
-  for (let up = el; up; up = parentOf(up)) {
-    if (slapped.some((entry) => entry.el === up)) el = parentOf(up);
-  }
+  const slappedEls = new Set(slapped.map((entry) => entry.el));
+  const unslapped = (hits) => hits.find((hit) => !isWithin(hit, slappedEls));
+  let el = deepest(unslapped(document.elementsFromPoint(x, y)), (root) => unslapped(root.elementsFromPoint(x, y)));
   let fallback = null;
   while (el && el !== document.documentElement && el !== document.body) {
     if (el.style && el !== overlay.host) {
@@ -971,6 +971,13 @@ function slapTarget(x, y) {
 
 function parentOf(el) {
   return el.parentElement || el.getRootNode()?.host || null;
+}
+
+function isWithin(el, ancestors) {
+  for (let up = el; up; up = parentOf(up)) {
+    if (ancestors.has(up)) return true;
+  }
+  return false;
 }
 
 function saveProp(el, prop) {
@@ -1005,40 +1012,47 @@ function slapAt(x, y) {
   route('slap', x, y, 0);
   if (settings.sound) playSlap(SLAP_IMPACT_MS / 1000);
   if (!el) return;
-  const rect = el.getBoundingClientRect();
-  const transformOrigin = `${x - rect.left}px ${y - rect.top}px`;
-  const entry = { el, transformOrigin, display: saveProp(el, 'display'), pointerEvents: saveProp(el, 'pointer-events'), timer: 0, animation: null };
-  el.style.setProperty('pointer-events', 'none', 'important');
+  const entry = { el, pivot: localPoint(el, x, y), display: saveProp(el, 'display'), pointerEvents: saveProp(el, 'pointer-events'), timer: 0, animations: [] };
   slapped.push(entry);
   if (!IS_EXTENSION_PAGE) send({ action: 'slapped' });
   entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
 }
 
+function localPoint(el, x, y) {
+  const rect = el.getBoundingClientRect();
+  const [ox, oy] = getComputedStyle(el).transformOrigin.split(' ').map(parseFloat);
+  const sx = el.offsetWidth ? el.offsetWidth / rect.width : 1;
+  const sy = el.offsetHeight ? el.offsetHeight / rect.height : 1;
+  return [(x - rect.left) * sx - ox, (y - rect.top) * sy - oy];
+}
+
 function knockOff(entry) {
   entry.timer = 0;
-  const { el, transformOrigin } = entry;
-  const rect = el.getBoundingClientRect();
-  const dx = -(rect.right + 120);
-  const animation = reducedMotion?.matches
-    ? el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' })
-    : el.animate([
-      { translate: '0px 0px', rotate: '0deg', scale: '1', transformOrigin, opacity: 1, easing: 'cubic-bezier(0.3, 0.7, 0.4, 1)' },
-      { translate: '0px 0px', rotate: '0deg', scale: '0.965', transformOrigin, opacity: 1, offset: 0.06, easing: 'cubic-bezier(0.25, 0.6, 0.4, 1)' },
-      { opacity: 1, offset: 0.3 },
-      { translate: `${dx}px -90px`, rotate: '-32deg', scale: '0.6', transformOrigin, opacity: 0 },
-    ], { duration: 560, fill: 'forwards' });
-  entry.animation = animation;
+  const { el, pivot: [px, py] } = entry;
+  el.style.setProperty('pointer-events', 'none', 'important');
+  const dx = -(el.getBoundingClientRect().right + 120);
+  const around = (tx, ty, angle, scale) => `translate(${px + tx}px, ${py + ty}px) rotate(${angle}deg) scale(${scale}) translate(${-px}px, ${-py}px)`;
+  entry.animations = reducedMotion?.matches
+    ? [el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' })]
+    : [
+      el.animate([
+        { transform: around(0, 0, 0, 1), easing: 'cubic-bezier(0.3, 0.7, 0.4, 1)' },
+        { transform: around(0, 0, 0, 0.965), offset: 0.06, easing: 'cubic-bezier(0.25, 0.6, 0.4, 1)' },
+        { transform: around(dx, -90, -32, 0.6) },
+      ], { duration: 560, fill: 'forwards', composite: 'add' }),
+      el.animate([{ opacity: 1 }, { opacity: 1, offset: 0.3 }, { opacity: 0 }], { duration: 560, fill: 'forwards' }),
+    ];
   const hide = () => {
     if (!slapped.includes(entry)) return;
     el.style.setProperty('display', 'none', 'important');
-    animation.cancel();
+    for (const animation of entry.animations) animation.cancel();
   };
-  animation.finished.then(hide, hide);
+  entry.animations[0].finished.then(hide, hide);
 }
 
 function putBack(entry) {
   clearTimeout(entry.timer);
-  entry.animation?.cancel();
+  for (const animation of entry.animations) animation.cancel();
   restoreProp(entry.el, 'display', entry.display);
   restoreProp(entry.el, 'pointer-events', entry.pointerEvents);
 }
@@ -1047,7 +1061,9 @@ function unslap() {
   const last = slapped.pop();
   if (!last) return false;
   putBack(last);
-  last.el.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: 'ease-out' });
+  const settle = { duration: 220, easing: 'ease-out' };
+  last.el.animate([{ transform: 'scale(0.96)' }, { transform: 'scale(1)' }], { ...settle, composite: 'add' });
+  last.el.animate([{ opacity: 0 }, { opacity: 1 }], settle);
   return true;
 }
 
@@ -1060,7 +1076,7 @@ function isEditable(event) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (!settings?.slap || !event.isTrusted) return;
+  if (!event.isTrusted || !liveSettings()?.slap) return;
   if (event.key === 'Alt' && lastPointer) highlight(slapTarget(lastPointer.x, lastPointer.y));
   if (!event.altKey || event.code !== 'KeyZ' || isEditable(event)) return;
   swallow(event);

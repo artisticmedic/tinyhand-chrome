@@ -20,7 +20,7 @@ await page.evaluate(() => {
   const sample = () => {
     for (const id of Object.keys(window.track.paths)) {
       const style = getComputedStyle(document.getElementById(id));
-      if (style.display !== 'none') window.track.paths[id].push(parseFloat(style.translate) || 0);
+      if (style.display !== 'none') window.track.paths[id].push(style.transform === 'none' ? 0 : new DOMMatrixReadOnly(style.transform).e);
     }
     requestAnimationFrame(sample);
   };
@@ -46,7 +46,7 @@ check('three quick ⌥-clicks on nested boxes knock off three different boxes', 
 
 const track = await page.evaluate(() => window.track);
 for (const [id, path] of Object.entries(track.paths)) {
-  const travel = -Math.min(...path);
+  const travel = path[0] - Math.min(...path);
   const snapBack = path.some((x, i) => i > 0 && x > path[i - 1] + 4);
   check(`${id} flies off without snapping back`, travel > 150 && !snapBack, `travel ${Math.round(travel)}px, snap back ${snapBack}`);
 }
@@ -61,42 +61,80 @@ await wait(400);
 const back = await state();
 check('three ⌥Z presses bring all three back', Object.values(back).every((d) => d !== 'none'), JSON.stringify(back));
 
+await page.evaluate(() => {
+  document.body.insertAdjacentHTML('beforeend', `
+    <style>#hovered { background: rgb(220, 220, 220) } #hovered:hover { background: rgb(255, 0, 0) }</style>
+    <div id="tailwind" style="position:fixed;left:50%;top:12%;width:300px;height:100px;translate:-50% -50%;background:#dde7f7"></div>
+    <div id="scaled" style="position:fixed;left:60px;top:300px;width:200px;height:100px;transform:scale(1.2);background:#f7e2c8"></div>
+    <div id="centred" style="position:fixed;left:50%;top:88%;width:300px;height:100px;transform:translate(-50%,-50%);background:#e8dcf7"></div>
+    <div id="hovered" style="position:fixed;left:1000px;top:300px;width:200px;height:100px"></div>`);
+});
+
+const close = (a, b) => Math.abs(a - b) < 1;
+const round = (rect) => Object.fromEntries(Object.entries(rect).map(([k, v]) => [k, Math.round(v * 10) / 10]));
+for (const [id, dx, dy, label] of [
+  ['inner', -40, -40, 'a plain box'],
+  ['tailwind', 90, 20, 'a box centred with the translate property'],
+  ['scaled', 60, -20, 'a box with its own transform scale'],
+  ['centred', -100, 25, 'a box centred with a transform'],
+]) {
+  const before = await page.locator(`#${id}`).boundingBox();
+  const x = before.x + before.width / 2 + dx;
+  const y = before.y + before.height / 2 + dy;
+  await page.keyboard.down('Alt');
+  await page.mouse.move(x, y, { steps: 3 });
+  await wait(300);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForFunction((id) => document.getElementById(id).getAnimations().length, id);
+  const hit = await page.evaluate((id) => {
+    const el = document.getElementById(id);
+    const animations = el.getAnimations();
+    const rectAt = (time) => {
+      for (const animation of animations) { animation.pause(); animation.currentTime = time; }
+      const { left, top, width, height } = el.getBoundingClientRect();
+      return { left, top, width, height };
+    };
+    return { start: rectAt(0), dent: rectAt(560 * 0.06) };
+  }, id);
+  const still = close(hit.start.left, before.x) && close(hit.start.top, before.y);
+  const dented = close(hit.dent.width, before.width * 0.965) && close(x - hit.dent.left, (x - before.x) * 0.965) && close(y - hit.dent.top, (y - before.y) * 0.965);
+  check(`${label} dents around the click point without jumping`, still && dented, `before ${JSON.stringify(round(before))}, hit ${JSON.stringify(round(hit.start))}, dent ${JSON.stringify(round(hit.dent))}`);
+
+  await page.keyboard.press('KeyZ');
+  await page.waitForFunction((id) => document.getElementById(id).getAnimations().some((a) => a.effect.getKeyframes()[0].transform === 'scale(0.96)'), id);
+  const undo = await page.evaluate((id) => {
+    const el = document.getElementById(id);
+    const animations = el.getAnimations();
+    const centreAt = (time) => {
+      for (const animation of animations) { animation.pause(); animation.currentTime = time; }
+      const r = el.getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2, r.width];
+    };
+    const during = [0, 110].map(centreAt);
+    for (const animation of animations) animation.cancel();
+    const r = el.getBoundingClientRect();
+    return { during, settled: [r.left + r.width / 2, r.top + r.height / 2, r.width] };
+  }, id);
+  const [cx, cy, width] = undo.settled;
+  const inPlace = undo.during.every(([x, y]) => close(x, cx) && close(y, cy)) && close(undo.during[0][2], width * 0.96);
+  check(`⌥Z brings ${label} back in place`, inPlace, JSON.stringify(undo));
+  await page.keyboard.up('Alt');
+  await wait(300);
+}
+
+const hovered = await page.locator('#hovered').boundingBox();
 await page.keyboard.down('Alt');
-await page.mouse.move(600, 360, { steps: 3 });
+await page.mouse.move(hovered.x + 100, hovered.y + 50, { steps: 3 });
 await wait(300);
 await page.mouse.down();
 await page.mouse.up();
-await page.waitForFunction(() => document.getElementById('inner').getAnimations().length);
-const keyframes = await page.evaluate(() => document.getElementById('inner').getAnimations()[0].effect.getKeyframes()
-  .slice(0, 2).map(({ offset, scale, transformOrigin }) => ({ offset, scale, transformOrigin })));
-const [first, dent] = keyframes;
-check('the knock-off first dents the box around the click point', first.transformOrigin === '70px 30px' && dent.scale === '0.965' && dent.offset === 0.06, JSON.stringify(keyframes));
+await wait(60);
+const windUp = await page.evaluate(() => getComputedStyle(document.getElementById('hovered')).backgroundColor);
+check('a hovered box keeps its hover style until the hand lands', windUp === 'rgb(255, 0, 0)', windUp);
+await wait(800);
 await page.keyboard.press('KeyZ');
 await page.keyboard.up('Alt');
-await wait(300);
-
-await page.evaluate(() => {
-  const box = Object.assign(document.createElement('div'), { id: 'centred' });
-  box.style.cssText = 'position:fixed;left:50%;top:70%;width:300px;height:120px;transform:translate(-50%,-50%);background:#e8dcf7';
-  document.body.append(box);
-  window.lefts = [];
-  const sample = () => {
-    if (getComputedStyle(box).display !== 'none') window.lefts.push(box.getBoundingClientRect().left);
-    requestAnimationFrame(sample);
-  };
-  requestAnimationFrame(sample);
-});
-const centred = await page.locator('#centred').boundingBox();
-await page.keyboard.down('Alt');
-await page.mouse.move(centred.x + centred.width / 2, centred.y + centred.height / 2, { steps: 3 });
-await wait(300);
-await page.mouse.down();
-await page.mouse.up();
-await wait(1000);
-await page.keyboard.up('Alt');
-const lefts = await page.evaluate(() => window.lefts);
-const rightward = Math.max(...lefts) - lefts[0];
-check('a box with its own transform dents in place instead of jumping', rightward < 20 && Math.min(...lefts) < lefts[0] - 150, `furthest right ${rightward.toFixed(1)}px, travel ${(lefts[0] - Math.min(...lefts)).toFixed(0)}px`);
 
 console.log('page errors:', errors.length ? errors : 'none');
 await context.close();

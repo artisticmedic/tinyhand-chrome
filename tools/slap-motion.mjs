@@ -185,3 +185,12 @@ test('a delayed iframe click can arrive after a later top-frame click without lo
   assert.ok(parent.pose(224).press < 1);
   samePose(parent.pose(225), CONTACT);
 });
+
+test('an iframe click from a clock running ahead still hits 175 ms after it arrives', () => {
+  const child = hand({ top: false, origin: 1700000000000 + 5000 });
+  const parent = hand();
+  child.click(0);
+  parent.relay(100, child.packets[0]);
+  assert.ok(parent.pose(274).press < 1);
+  samePose(parent.pose(275), CONTACT);
+});
