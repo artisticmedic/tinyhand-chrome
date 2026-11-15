@@ -61,6 +61,19 @@ await wait(400);
 const back = await state();
 check('three ⌥Z presses bring all three back', Object.values(back).every((d) => d !== 'none'), JSON.stringify(back));
 
+await page.keyboard.down('Alt');
+await page.mouse.move(600, 360, { steps: 3 });
+await wait(300);
+await page.mouse.down();
+await page.mouse.up();
+await wait(260);
+const keyframes = await page.evaluate(() => document.getElementById('inner').getAnimations()[0].effect.getKeyframes()
+  .slice(0, 2).map(({ offset, transform, transformOrigin }) => ({ offset, transform, transformOrigin })));
+const [first, dent] = keyframes;
+check('the knock-off first dents the box around the click point', first.transformOrigin === '70px 30px' && dent.transform === 'scale(0.965)' && dent.offset === 0.06, JSON.stringify(keyframes));
+await page.keyboard.press('KeyZ');
+await page.keyboard.up('Alt');
+
 console.log('page errors:', errors.length ? errors : 'none');
 await context.close();
 const failed = results.filter((ok) => !ok).length;
