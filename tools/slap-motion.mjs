@@ -90,12 +90,19 @@ test('a slap winds up, hits at 175 ms, holds contact, recoils once and settles',
   assert.equal(h.overlay.slaps.length, 0);
 });
 
-test('a second click 50 ms later winds up only 30% as far and keeps its hit time', () => {
+test('the closer a second click follows, the less the hand winds up, and it still hits on time', () => {
+  const reachAfter = (gap) => {
+    const h = hand();
+    h.click(0);
+    h.click(gap);
+    return Math.max(...Array.from({ length: gap }, (_, i) => h.pose(199 + i).swing));
+  };
+  const reaches = [30, 50, 90, 150].map(reachAfter);
+  assert.ok(reaches[0] > 0 && reaches[0] < 0.05, String(reaches));
+  for (let i = 1; i < reaches.length; i++) assert.ok(reaches[i] > reaches[i - 1], String(reaches));
   const h = hand();
   h.click(0);
   h.click(50);
-  const reach = Math.max(...Array.from({ length: 26 }, (_, i) => h.pose(199 + i).swing));
-  assert.ok(reach > 0.2 && reach <= 0.7 * 0.3, String(reach));
   assert.ok(h.pose(224).press < 1);
   samePose(h.pose(225), CONTACT);
 });
@@ -145,6 +152,24 @@ test('nested iframe relays preserve the originating click time across clock orig
   assert.deepEqual(parent.cursor(), { x: 120, y: 240 });
   assert.ok(parent.pose(474).press < 1);
   samePose(parent.pose(475), CONTACT);
+});
+
+test('an iframe click relayed after its hit time strikes from the current pose instead of snapping', () => {
+  const child = hand({ top: false, origin: 1700000000000 - 300 });
+  const parent = hand();
+  parent.click(0);
+  parent.click(60);
+  child.click(0);
+  const before = parent.pose(100);
+  parent.relay(100, child.packets[0]);
+  let previous = parent.pose(100);
+  samePose(previous, before);
+  for (let time = 101; time <= 500; time++) {
+    const pose = parent.pose(time);
+    assert.ok(Math.abs(pose.swing - previous.swing) < 0.1, `${time}: ${previous.swing} -> ${pose.swing}`);
+    previous = pose;
+  }
+  samePose(parent.pose(150), CONTACT);
 });
 
 test('a delayed iframe click can arrive after a later top-frame click without losing either hit', () => {

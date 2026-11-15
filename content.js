@@ -555,7 +555,7 @@ function clearInk() {
 }
 
 const easeIn = (k) => k * k * k;
-const STILL = { swing: 0, scale: 0, press: 0 };
+const NO_VELOCITY = { swing: 0, scale: 0, press: 0 };
 
 function hermite(p0, m0, p1, u) {
   const u2 = u * u;
@@ -582,7 +582,7 @@ function slapPoseAt(slap, now) {
   const span = hit - start;
   const strike = Math.min(SLAP_STRIKE_MS, span * 0.4);
   const wind = span - strike;
-  const reach = Math.max(0.3, Math.min(1, wind / (0.75 * SLAP_WIND_MS)));
+  const reach = Math.min(1, wind / (0.75 * SLAP_WIND_MS));
   const peak = { swing: SLAP_WIND * reach, scale: 1 + 0.18 * reach, press: 0 };
   if (now < hit - strike) {
     const u = Math.max(0, (now - start) / wind);
@@ -644,8 +644,9 @@ function startSlap(x, y, time) {
   pointAt(x, y);
   const now = performance.now();
   const from = slapPose(now);
-  const hit = time - performance.timeOrigin + SLAP_IMPACT_MS;
-  overlay.slaps.push({ start: now, hit, from, velocity: STILL });
+  const velocity = overlay.slaps.length ? slapVelocity(overlay.slaps[0], now) : NO_VELOCITY;
+  const hit = Math.max(now + SLAP_STRIKE_MS, time - performance.timeOrigin + SLAP_IMPACT_MS);
+  overlay.slaps.push({ start: now, hit, from, velocity });
   overlay.slaps.sort((a, b) => a.hit - b.hit);
   for (let i = 1; i < overlay.slaps.length; i++) {
     const previous = overlay.slaps[i - 1];
@@ -1021,10 +1022,10 @@ function knockOff(entry) {
   const animation = reducedMotion?.matches
     ? el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' })
     : el.animate([
-      { transform: 'none', transformOrigin, opacity: 1, easing: 'cubic-bezier(0.3, 0.7, 0.4, 1)' },
-      { transform: 'scale(0.965)', transformOrigin, opacity: 1, offset: 0.06, easing: 'cubic-bezier(0.25, 0.6, 0.4, 1)' },
+      { translate: '0px 0px', rotate: '0deg', scale: '1', transformOrigin, opacity: 1, easing: 'cubic-bezier(0.3, 0.7, 0.4, 1)' },
+      { translate: '0px 0px', rotate: '0deg', scale: '0.965', transformOrigin, opacity: 1, offset: 0.06, easing: 'cubic-bezier(0.25, 0.6, 0.4, 1)' },
       { opacity: 1, offset: 0.3 },
-      { transform: `translate(${dx}px, -90px) rotate(-32deg) scale(0.6)`, transformOrigin, opacity: 0 },
+      { translate: `${dx}px -90px`, rotate: '-32deg', scale: '0.6', transformOrigin, opacity: 0 },
     ], { duration: 560, fill: 'forwards' });
   entry.animation = animation;
   const hide = () => {

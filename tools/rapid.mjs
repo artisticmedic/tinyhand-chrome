@@ -20,7 +20,7 @@ await page.evaluate(() => {
   const sample = () => {
     for (const id of Object.keys(window.track.paths)) {
       const style = getComputedStyle(document.getElementById(id));
-      if (style.display !== 'none') window.track.paths[id].push(new DOMMatrixReadOnly(style.transform === 'none' ? undefined : style.transform).e);
+      if (style.display !== 'none') window.track.paths[id].push(parseFloat(style.translate) || 0);
     }
     requestAnimationFrame(sample);
   };
@@ -66,13 +66,37 @@ await page.mouse.move(600, 360, { steps: 3 });
 await wait(300);
 await page.mouse.down();
 await page.mouse.up();
-await wait(260);
+await page.waitForFunction(() => document.getElementById('inner').getAnimations().length);
 const keyframes = await page.evaluate(() => document.getElementById('inner').getAnimations()[0].effect.getKeyframes()
-  .slice(0, 2).map(({ offset, transform, transformOrigin }) => ({ offset, transform, transformOrigin })));
+  .slice(0, 2).map(({ offset, scale, transformOrigin }) => ({ offset, scale, transformOrigin })));
 const [first, dent] = keyframes;
-check('the knock-off first dents the box around the click point', first.transformOrigin === '70px 30px' && dent.transform === 'scale(0.965)' && dent.offset === 0.06, JSON.stringify(keyframes));
+check('the knock-off first dents the box around the click point', first.transformOrigin === '70px 30px' && dent.scale === '0.965' && dent.offset === 0.06, JSON.stringify(keyframes));
 await page.keyboard.press('KeyZ');
 await page.keyboard.up('Alt');
+await wait(300);
+
+await page.evaluate(() => {
+  const box = Object.assign(document.createElement('div'), { id: 'centred' });
+  box.style.cssText = 'position:fixed;left:50%;top:70%;width:300px;height:120px;transform:translate(-50%,-50%);background:#e8dcf7';
+  document.body.append(box);
+  window.lefts = [];
+  const sample = () => {
+    if (getComputedStyle(box).display !== 'none') window.lefts.push(box.getBoundingClientRect().left);
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+});
+const centred = await page.locator('#centred').boundingBox();
+await page.keyboard.down('Alt');
+await page.mouse.move(centred.x + centred.width / 2, centred.y + centred.height / 2, { steps: 3 });
+await wait(300);
+await page.mouse.down();
+await page.mouse.up();
+await wait(1000);
+await page.keyboard.up('Alt');
+const lefts = await page.evaluate(() => window.lefts);
+const rightward = Math.max(...lefts) - lefts[0];
+check('a box with its own transform dents in place instead of jumping', rightward < 20 && Math.min(...lefts) < lefts[0] - 150, `furthest right ${rightward.toFixed(1)}px, travel ${(lefts[0] - Math.min(...lefts)).toFixed(0)}px`);
 
 console.log('page errors:', errors.length ? errors : 'none');
 await context.close();
