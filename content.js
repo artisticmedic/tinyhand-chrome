@@ -66,11 +66,11 @@ function playTap(id) {
   );
 }
 
-function playSlap(delay) {
+function playSlap(hit) {
   audioContext ??= new AudioContext();
   const ctx = audioContext;
   if (ctx.state === 'suspended') ctx.resume();
-  const when = ctx.currentTime + delay;
+  const when = ctx.currentTime + Math.max(0, hit - performance.now()) / 1000;
 
   const length = Math.floor(ctx.sampleRate * 0.18);
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
@@ -1010,12 +1010,14 @@ function slapAt(x, y) {
   const el = slapTarget(x, y);
   unhighlight();
   route('slap', x, y, 0);
-  if (settings.sound) playSlap(SLAP_IMPACT_MS / 1000);
-  if (!el) return;
-  const entry = { el, pivot: localPoint(el, x, y), display: saveProp(el, 'display'), pointerEvents: saveProp(el, 'pointer-events'), timer: 0, animations: [] };
-  slapped.push(entry);
-  if (!IS_EXTENSION_PAGE) send({ action: 'slapped' });
-  entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
+  const hit = performance.now() + SLAP_IMPACT_MS;
+  if (el) {
+    const entry = { el, pivot: localPoint(el, x, y), display: saveProp(el, 'display'), pointerEvents: saveProp(el, 'pointer-events'), timer: 0, animations: [] };
+    slapped.push(entry);
+    if (!IS_EXTENSION_PAGE) send({ action: 'slapped' });
+    entry.timer = setTimeout(() => knockOff(entry), SLAP_IMPACT_MS);
+  }
+  if (settings.sound) playSlap(hit);
 }
 
 function localPoint(el, x, y) {

@@ -15,9 +15,10 @@ await page.evaluate(() => {
         <div id="inner" style="position:absolute;left:90px;top:60px;width:220px;height:140px;background:#d4f0d8"><span style="display:block;height:100%;pointer-events:auto"></span></div>
       </div>
     </section>`;
-  window.track = { clicks: 0, paths: { outer: [], middle: [], inner: [] } };
+  window.track = { clicks: 0, paths: { outer: [], middle: [], inner: [] }, frames: [] };
   document.addEventListener('click', () => window.track.clicks++, true);
-  const sample = () => {
+  const sample = (time) => {
+    window.track.frames.push([time, document.getElementById('inner').getAnimations().length]);
     for (const id of Object.keys(window.track.paths)) {
       const style = getComputedStyle(document.getElementById(id));
       if (style.display !== 'none') window.track.paths[id].push(style.transform === 'none' ? 0 : new DOMMatrixReadOnly(style.transform).e);
@@ -50,6 +51,15 @@ for (const [id, path] of Object.entries(track.paths)) {
   const snapBack = path.some((x, i) => i > 0 && x > path[i - 1] + 4);
   check(`${id} flies off without snapping back`, travel > 150 && !snapBack, `travel ${Math.round(travel)}px, snap back ${snapBack}`);
 }
+const start = track.frames.findIndex(([, animations]) => animations > 0);
+let stall = 0;
+let stallEnd = 0;
+for (let i = 1; i <= start; i++) {
+  const gap = track.frames[i][0] - track.frames[i - 1][0];
+  if (track.frames[start][0] - track.frames[i][0] < 400 && gap > stall) [stall, stallEnd] = [gap, track.frames[i][0]];
+}
+const afterStall = track.frames[start][0] - stallEnd;
+check('the first slap of the session knocks off on time even when starting the sound stalls the page', stall < 100 || afterStall < 80, `longest frame before the knock-off ${Math.round(stall)}ms, knock-off ${Math.round(afterStall)}ms after it`);
 check('the page sees none of the clicks', track.clicks === 0, `clicks ${track.clicks}`);
 
 for (let i = 0; i < 3; i++) {
