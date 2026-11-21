@@ -91,7 +91,7 @@ node tools/slap.mjs     # outline, slap, page sees no click, ⌥Z
 node tools/draw.mjs     # strokes, arrow, fade, Esc, iframe, still Shift-click
 node tools/inject.mjs   # a second injected copy changes nothing; no pointer data reaches the page
 node tools/edges.mjs    # long drags, closed shadow roots, touch, blur, frame floods, rotated frames
-node tools/update.mjs   # a real reload over an open tab, then off, then disabled
+node tools/update.mjs   # a real reload over an open tab, then off, then disabled; the page never loads extension files
 node tools/rapid.mjs    # quick ⌥-clicks knock off one element each, none snaps back; a slap dents around the click and ⌥Z restores in place, whatever the element's own transform
 node --test tools/slap-motion.mjs   # the slap's timeline, without a browser
 ```

@@ -1,4 +1,4 @@
-import { DEFAULTS } from './shared/catalog.js';
+import { DEFAULTS, HANDS, INKS, SIZES, STYLES, normalize } from './shared/catalog.js';
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   await chrome.storage.local.set(await chrome.storage.local.get(DEFAULTS));
@@ -58,9 +58,21 @@ function claimFrame({ id, replaces }, tabId, frameId) {
   persist();
 }
 
+async function assetData(file) {
+  if (!/^(hands\/[\w-]+\.png|sounds\/tap_[\w-]+\.wav)$/.test(file)) return null;
+  const bytes = new Uint8Array(await (await fetch(file)).arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 async function handle(message, sender) {
   const tabId = sender.tab.id;
-  if (message.action === 'setCursorCss') {
+  if (message.action === 'settings') {
+    return { settings: normalize(await chrome.storage.local.get(DEFAULTS)), catalog: { HANDS, INKS, SIZES, STYLES } };
+  } else if (message.action === 'asset') {
+    return { data: await assetData(message.file) };
+  } else if (message.action === 'setCursorCss') {
     setCursorCss(message, sender);
   } else if (message.action === 'claimFrame') {
     claimFrame(message, tabId, sender.frameId);
@@ -85,7 +97,7 @@ async function handle(message, sender) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!sender.tab) return false;
-  restored.then(() => handle(message, sender)).then(sendResponse);
+  restored.then(() => handle(message, sender)).then(sendResponse, () => sendResponse(null));
   return true;
 });
 

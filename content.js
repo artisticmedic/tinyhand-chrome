@@ -15,11 +15,6 @@ const IS_MAC = /Mac/.test(navigator.platform);
 const randomHex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
 const wantsArrow = (event) => (IS_MAC ? event.metaKey : event.ctrlKey);
 
-// Extension pages' CSP doesn't treat use_dynamic_url's addresses as 'self'.
-function extensionUrl(file) {
-  return IS_EXTENSION_PAGE ? `/${file}` : chrome.runtime.getURL(file);
-}
-
 const GRIP_DEPTH = 0.12;
 const GRIP_LEAN = 0.30;
 const GRIP_FOLLOW_PER_MS = 0.0048;
@@ -51,9 +46,7 @@ function playTap(id) {
   audioContext ??= new AudioContext();
   if (audioContext.state === 'suspended') audioContext.resume();
   if (!buffers.has(id)) {
-    buffers.set(id, fetch(extensionUrl(`sounds/tap_${id}.wav`))
-      .then((response) => response.arrayBuffer())
-      .then((data) => audioContext.decodeAudioData(data)));
+    buffers.set(id, loadAsset(`sounds/tap_${id}.wav`).then((data) => audioContext.decodeAudioData(data)));
   }
   buffers.get(id).then(
     (buffer) => {
@@ -115,6 +108,12 @@ function send(message) {
   if (chrome.runtime?.id) return chrome.runtime.sendMessage(message).catch(() => null);
   retire();
   return Promise.resolve(null);
+}
+
+async function loadAsset(file) {
+  const reply = await send({ action: 'asset', file });
+  if (!reply?.data) throw new Error(`no ${file}`);
+  return Uint8Array.from(atob(reply.data), (c) => c.charCodeAt(0)).buffer;
 }
 
 let pageStyle = null;
@@ -294,9 +293,7 @@ function unmountOverlay() {
 
 function loadImage(id) {
   if (!overlay.images.has(id)) {
-    overlay.images.set(id, fetch(extensionUrl(`hands/${id}.png`))
-      .then((response) => response.blob())
-      .then((blob) => createImageBitmap(blob)));
+    overlay.images.set(id, loadAsset(`hands/${id}.png`).then((data) => createImageBitmap(new Blob([data]))));
   }
   return overlay.images.get(id);
 }
@@ -1117,10 +1114,10 @@ function standDown() {
 }
 
 async function apply() {
-  if (IS_TOP) catalog ??= await import(extensionUrl('shared/catalog.js'));
-  const stored = IS_TOP
-    ? catalog.normalize(await chrome.storage.local.get(catalog.DEFAULTS))
-    : await chrome.storage.local.get(null);
+  const reply = IS_TOP ? await send({ action: 'settings' }) : { settings: await chrome.storage.local.get(null) };
+  if (!reply) return;
+  catalog = reply.catalog ?? catalog;
+  const stored = reply.settings;
   const xmlTop = IS_TOP && !(document.documentElement instanceof HTMLElement);
   if (!stored.enabled || xmlTop || stored.disabledSites?.includes(topHostname())) {
     standDown();

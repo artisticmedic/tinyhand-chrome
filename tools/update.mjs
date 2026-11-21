@@ -12,6 +12,9 @@ const cdp = await context.newCDPSession(page);
 const exceptions = [];
 cdp.on('Runtime.exceptionThrown', ({ exceptionDetails }) => exceptions.push(exceptionDetails.exception?.description ?? exceptionDetails.text));
 await cdp.send('Runtime.enable');
+const extensionRequests = [];
+cdp.on('Network.requestWillBeSent', ({ request }) => { if (request.url.startsWith('chrome-extension://')) extensionRequests.push(request.url); });
+await cdp.send('Network.enable');
 await page.frameLocator('#child').locator('#status').waitFor();
 await wait(800);
 
@@ -83,6 +86,7 @@ await wiggle();
 const disabled = await state();
 check('extension disabled: the hand is gone and the real cursor is back in page and frame', disabled.overlays === 0 && disabled.cursor !== 'none' && disabled.frameCursor !== 'none', JSON.stringify(disabled));
 
+check('the page never requests extension files, before or after the update', extensionRequests.length === 0, extensionRequests.slice(0, 3).join(' '));
 check('no uncaught exceptions in any world', exceptions.length === 0, exceptions.join(' | '));
 await context.close();
 const failed = results.filter((ok) => !ok).length;
