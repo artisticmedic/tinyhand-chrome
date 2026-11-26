@@ -1,8 +1,9 @@
 # TinyHand for Chrome
 
-A tiny hand on a stick that points at things on any website, for demos,
-screen shares and streams. It's an unofficial port of
-[TinyHand](https://tinyhand.app), the free Mac app by
+By [Tim Gailey](https://timgailey.com). A tiny hand on a stick that points at
+things on any website, for demos, screen shares and streams.
+
+It's an unofficial port of [TinyHand](https://tinyhand.app), the free Mac app by
 [Kamran Ahmed](https://kamran.fyi), to Chrome and other Chromium browsers. The
 hands, the tap sounds and the way the hand moves are his.
 
